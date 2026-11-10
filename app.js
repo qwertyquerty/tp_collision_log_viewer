@@ -63,6 +63,29 @@
       },
     },
     {
+      id: 'wcand',
+      label: 'Wall push candidates',
+      get: (r) => ({
+        wall: (r.fr.wall_list || []).length
+          ? r.fr.wall_list.reduce((sum, w) => sum + (w.count || 0), 0)
+          : null,
+      }),
+    },
+    {
+      id: 'wmax',
+      label: 'Largest single wall push',
+      get: (r) => ({
+        wall: (r.fr.wall_cir || []).length
+          ? Math.max(...r.fr.wall_cir.map((e) => flatDistance(e.pos_before, e.pos_after)))
+          : null,
+      }),
+    },
+    {
+      id: 'near',
+      label: 'Nearby triangles logged',
+      get: (r) => ({ start: r.fr.nearby ? r.fr.nearby[0].count : null }),
+    },
+    {
       id: 'wat',
       label: 'Water height',
       get: (r) => ({ clamp: val(ev(r, 'crr_post'), 'water_h') }),
@@ -190,6 +213,7 @@
   function parseLog(text) {
     const frames = new Map();
     let bad = 0;
+    let seq = 0;
     for (const line of text.split(/\r?\n/)) {
       if (!line.trim()) continue;
       let e;
@@ -203,6 +227,7 @@
         bad++;
         continue;
       }
+      e.__n = seq++;
       if (!frames.has(e.f)) frames.set(e.f, {});
       const fr = frames.get(e.f);
       (fr[e.ev] = fr[e.ev] || []).push(e);
@@ -372,8 +397,29 @@
     }
     if (rows.some((r) => r.fr.line_down))
       cols.push({ key: 'ldown', label: 'line down', check: true });
-    for (let k = 0; k < 3; k++)
-      cols.push({ key: 'wall' + k, label: 'wall: ' + CIR[k], circle: k, check: true });
+    const wallLogged = rows.some((r) => r.fr.wall_list || r.fr.wall_dzb_post);
+    rows.forEach((r) => {
+      r.pushes = wallLogged ? wallPushes(r) : null;
+    });
+    if (wallLogged) {
+      const most = Math.max(1, ...rows.map((r) => r.pushes.length));
+      for (let k = 0; k < most; k++)
+        cols.push({
+          key: 'wp' + k,
+          label: 'wall push ' + (k + 1),
+          check: true,
+          wallFirst: k === 0,
+        });
+    } else {
+      for (let k = 0; k < 3; k++)
+        cols.push({
+          key: 'wall' + k,
+          label: 'wall: ' + CIR[k],
+          circle: k,
+          check: true,
+          wallFirst: k === 0,
+        });
+    }
     cols.push({ key: 'lc2', label: 'line check 2', check: true });
     cols.push({ key: 'roof', label: 'ceiling', check: true });
     cols.push({ key: 'ground', label: 'ground', check: true });
@@ -389,6 +435,8 @@
     const has = new Set(cols.map((c) => c.key));
     const pts = {};
     const st = {};
+    const labels = {};
+    const detail = {};
     const set = (k, p, s) => {
       pts[k] = p;
       if (s) st[k] = s;
@@ -433,11 +481,25 @@
       set('ldown', cur, ld.hit ? 'hit' : 'ran');
     } else set('ldown', cur, 'skipped');
     const wp = ev(r, 'wall_post');
-    const whit = wp ? wp.circles.map((c) => c.wall_hit) : [false, false, false];
-    const last = Math.max(-1, ...whit.map((h, i) => (h ? i : -1)));
-    for (let k = 0; k < 3; k++) {
-      const moved = wp && (last < 0 ? k === 2 : k >= last);
-      set('wall' + k, moved ? wp.pos : cur, !wp ? 'skipped' : whit[k] ? 'hit' : 'ran');
+    if (r.pushes) {
+      for (let k = 0; has.has('wp' + k); k++) {
+        const push = r.pushes[k];
+        if (push) {
+          cur = push.pos;
+          set('wp' + k, cur, 'hit');
+          labels['wp' + k] = push.label;
+          detail['wp' + k] = push.detail;
+        } else {
+          set('wp' + k, cur, k === 0 && wp ? 'ran' : 'skipped');
+        }
+      }
+    } else {
+      const whit = wp ? wp.circles.map((c) => c.wall_hit) : [false, false, false];
+      const last = Math.max(-1, ...whit.map((h, i) => (h ? i : -1)));
+      for (let k = 0; k < 3; k++) {
+        const moved = wp && (last < 0 ? k === 2 : k >= last);
+        set('wall' + k, moved ? wp.pos : cur, !wp ? 'skipped' : whit[k] ? 'hit' : 'ran');
+      }
     }
     if (wp) cur = wp.pos;
     const l2 = ev(r, 'line2_post');
@@ -471,6 +533,65 @@
     r.pts = pts;
     r.st = st;
     r.has = has;
+    r.labels = labels;
+    r.detail = detail;
+  }
+
+  function flatDistance(a, b) {
+    return Math.hypot(b[0] - a[0], b[2] - a[2]);
+  }
+
+  function kindOf(normal) {
+    if (normal[1] >= 0.5) return 'floor';
+    return normal[1] < -0.8 ? 'ceiling' : 'wall';
+  }
+
+  function ownerText(e) {
+    return e.actor !== undefined && e.actor !== null ? ', actor ' + e.actor : '';
+  }
+
+  function wallCirDetail(e) {
+    const lines = [
+      `${kindOf(e.normal)} bg ${e.bg} poly ${e.poly}${ownerText(e)}, ${CIR[e.circle]} circle`,
+      `${e.result}, moved ${flatDistance(e.pos_before, e.pos_after).toPrecision(6)}`,
+      `slice y ${e.slice_y}, flat normal length ${e.flat_len} (inverse ${e.inv_flat_len})`,
+    ];
+    if (e.dist2 !== undefined) lines.push(`distance^2 to pusher ${e.dist2}, radius^2 ${e.radius2}`);
+    if (e.push_scale !== undefined) lines.push(`push scale ${e.push_scale}`);
+    if (e.cross_a !== undefined)
+      lines.push(
+        `circle line cross: a ${e.cross_a}, b ${e.cross_b}, c ${e.cross_c}` +
+          (e.cross_a_zero ? ' (a counts as zero, linear solve)' : ''),
+      );
+    if (e.push) lines.push(`push [${e.push[0]}, ${e.push[1]}]`);
+    return lines.join('<br>');
+  }
+
+  function wallPushes(r) {
+    const steps = [];
+    const pres = r.fr.wall_dzb_pre || [];
+    const items = [
+      ...(r.fr.wall_cir || []).map((e) => ({ e, type: 'cir' })),
+      ...(r.fr.wall_dzb_post || []).map((e, i) => ({ e, pre: pres[i], type: 'dzb' })),
+    ].sort((a, b) => a.e.__n - b.e.__n);
+    items.forEach(({ e, pre, type }) => {
+      if (type === 'cir') {
+        if (same(e.pos_before, e.pos_after)) return;
+        steps.push({
+          pos: e.pos_after,
+          label: `${CIR[e.circle]}: ${kindOf(e.normal)} ${e.poly}`,
+          detail: wallCirDetail(e),
+        });
+      } else if (pre && !same(pre.pos, e.pos)) {
+        const moved = flatDistance(pre.pos, e.pos).toPrecision(6);
+        steps.push({
+          pos: e.pos,
+          label: `object bg ${e.bg}`,
+          detail: `object wall push, bg ${e.bg}${ownerText(e)}, moved ${moved}`,
+        });
+      }
+    });
+    return steps;
   }
 
   function polyKey(p) {
@@ -507,6 +628,18 @@
     });
     const ld = ev(r, 'line_down');
     if (ld) add(ld.poly, 'line down hit');
+    (r.fr.wall_list || []).forEach((w) =>
+      (w.list || []).forEach((t) => {
+        if (!t.tri) return;
+        const n = t.normal;
+        const d = -(n[0] * t.tri[0][0] + n[1] * t.tri[0][1] + n[2] * t.tri[0][2]);
+        const kind = kindOf(n) === 'ceiling' ? 'roof' : kindOf(n);
+        add(
+          { bg: w.bg, poly: t.poly, actor: w.actor, normal: n, d, tri: t.tri, kind },
+          'wall push candidate',
+        );
+      }),
+    );
     const nb = ev(r, 'nearby');
     if (nb && nb.polys) nb.polys.forEach((p) => add(p, 'nearby'));
     const seen = new Set();
@@ -820,7 +953,7 @@
       rows.forEach((r, j) =>
         cols.forEach((c, ci) => {
           layout.xaxis.tickvals.push(X(j, ci));
-          layout.xaxis.ticktext.push(c.label);
+          layout.xaxis.ticktext.push((r.labels && r.labels[c.key]) || c.label);
         }),
       );
     } else {
@@ -992,6 +1125,7 @@
       if (show.surfaces || show.push) {
         const byKind = { floor: [], wall: [], roof: [] };
         const zones = [];
+        const pushers = [];
         rows.forEach((r, j) => {
           const at = ev(r, 'frame').pos;
           const x0 = X(j, 0) - 0.5;
@@ -1008,7 +1142,7 @@
                 null,
               );
             }
-            if (!show.push || kind !== 'wall') return;
+            if (!show.push || kind !== 'wall' || r.fr.wall_cir) return;
             const crr = ev(r, 'crr_pre');
             const radius = crr && crr.circles[0] ? crr.circles[0].r : 35;
             const zone = pushZone(poly, radius);
@@ -1030,6 +1164,46 @@
                 `${a} from ${near.toPrecision(9)} to ${far.toPrecision(9)}<br>` +
                 `starts ${zone.near.toPrecision(4)} in front of the face, pusher at ${zone.far.toPrecision(7)}`,
             });
+          });
+        });
+        if (show.push && ai !== 1)
+          rows.forEach((r, j) => {
+            const at = ev(r, 'frame').pos;
+            const other = ai === 0 ? 2 : 0;
+            (r.fr.wall_cir || []).forEach((e) => {
+              if (!e.pusher) return;
+              const [x0p, z0p, x1p, z1p] = e.pusher;
+              const a0 = ai === 0 ? x0p : z0p;
+              const a1 = ai === 0 ? x1p : z1p;
+              const o0 = ai === 0 ? z0p : x0p;
+              const o1 = ai === 0 ? z1p : x1p;
+              if (Math.abs(o1 - o0) < 1e-6) return;
+              const t = (at[other] - o0) / (o1 - o0);
+              const v = a0 + t * (a1 - a0);
+              if (!inRange(v)) return;
+              pushers.push({
+                x0: X(j, 0) - 0.5,
+                x1: X(j, nc - 1) + 0.5,
+                v,
+                text:
+                  `frame ${r.f}: pusher of ${kindOf(e.normal)} ${e.poly}, ${CIR[e.circle]} circle<br>` +
+                  `${a} = ${v.toPrecision(9)} at Link (segment t = ${t.toPrecision(4)})<br>${e.result}`,
+              });
+            });
+          });
+        pushers.forEach((q) => {
+          traces.push({
+            type: 'scatter',
+            mode: 'lines',
+            yaxis: p.ax,
+            x: [q.x0, q.x1],
+            y: [tf(q.v), tf(q.v)],
+            hoverinfo: 'text',
+            text: q.text,
+            line: { color: C.wall, width: 1.5, dash: 'dash' },
+            name: 'pusher (logged)',
+            legendgroup: 'pusher (logged)',
+            showlegend: legendOnce('pusher (logged)'),
           });
         });
         zones.forEach((z) => {
@@ -1122,7 +1296,7 @@
       rows.forEach((r, j) => {
         const m = v.get(r);
         cols.forEach((c, ci) => {
-          const m0 = m[c.key];
+          const m0 = m[c.key] !== undefined ? m[c.key] : c.wallFirst ? m.wall : undefined;
           if (m0 === undefined || m0 === null) return;
           xs.push(X(j, ci));
           ys.push(m0);
@@ -1184,7 +1358,11 @@
           cols.forEach((c, ci) => {
             if (!c.check || r.st[c.key] !== k) return;
             xs.push(X(j, ci));
-            cd.push([r.f, c.label]);
+            cd.push([
+              r.f,
+              (r.labels && r.labels[c.key]) || c.label,
+              r.detail && r.detail[c.key] ? '<br>' + r.detail[c.key] : '',
+            ]);
             cs.push(
               k === 'hit' || k === 'hitlow'
                 ? C.hit
@@ -1214,7 +1392,9 @@
           legendgroup: 'chk' + k,
           showlegend: legendOnce('chk' + k),
           hovertemplate:
-            'frame %{customdata[0]}, %{customdata[1]}: ' + styles[k].name + '<extra></extra>',
+            'frame %{customdata[0]}, %{customdata[1]}: ' +
+            styles[k].name +
+            '%{customdata[2]}<extra></extra>',
         });
       });
     }
@@ -1411,7 +1591,24 @@
         );
       else if (fr.line1_post && fr.line1_post[0].line_hit && !fr.line_cir)
         out.push({ f, k: 'hit', t: 'line check hit' });
-      if (fr.wall_post && fr.wall_post[0].wall_hit) out.push({ f, k: '', t: 'wall push' });
+      const bigPushes = (fr.wall_cir || []).filter(
+        (e) => flatDistance(e.pos_before, e.pos_after) > 50,
+      );
+      bigPushes.forEach((e) => {
+        const moved = flatDistance(e.pos_before, e.pos_after).toFixed(1);
+        const solve = e.cross_a_zero ? ', linear solve' : '';
+        out.push({
+          f,
+          k: 'hit',
+          t: `wall push ${moved} (${CIR[e.circle]}, ${kindOf(e.normal)} ${e.poly}${solve})`,
+        });
+      });
+      const beforeWall = fr.line1_post ? fr.line1_post[0] : fr.posmove_post && fr.posmove_post[0];
+      if (!bigPushes.length && fr.wall_post && beforeWall) {
+        const moved = flatDistance(beforeWall.pos, fr.wall_post[0].pos);
+        if (moved > 1)
+          out.push({ f, k: moved > 50 ? 'hit' : '', t: `wall push ${moved.toFixed(1)}` });
+      }
       const pm = fr.posmove_post && fr.posmove_post[0];
       const cp = fr.crr_post && fr.crr_post[0];
       if (pm && cp) {
