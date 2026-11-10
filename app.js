@@ -97,6 +97,14 @@
       },
     },
     {
+      id: 'bodyh',
+      label: 'Wolf/swim check push, horizontal',
+      get: (r) => {
+        const b = bodyStep(r);
+        return b.moved ? { body: flatDistance(b.from, b.pos) } : {};
+      },
+    },
+    {
       id: 'wcand',
       label: 'Wall push candidates',
       get: (r) => ({
@@ -138,6 +146,7 @@
 
   let log = null;
   let current = null;
+  let latest = null;
   const VIEW_FORMAT = 'tp-collision-log-view';
   const ui = {
     axes: {
@@ -145,6 +154,7 @@
       y: { on: true, scale: 'linear', off: 0, thr: 0.001 },
       z: { on: false, scale: 'linear', off: 0, thr: 0.001 },
     },
+    tab: 'steps',
   };
 
   function num(v) {
@@ -414,7 +424,10 @@
     const cols = [
       { key: 'start', label: 'start', check: true },
       { key: 'move', label: 'movement', check: true },
+      { key: 'body', label: 'wolf/swim check', check: true },
     ];
+    if (rows.some((r) => r.fr.movebg))
+      cols.push({ key: 'movebg', label: 'moving ground', check: true });
     for (let k = 0; k < 3; k++) {
       cols.push({ key: 'line' + k, label: 'line: ' + CIR[k], circle: k, check: true });
       if (kinds.has(k)) {
@@ -481,6 +494,18 @@
     const moved = pm && !same(cur, pm.pos);
     if (pm) cur = pm.pos;
     set('move', cur, moved ? 'hit' : 'ran');
+    const body = bodyStep(r);
+    if (body.moved) {
+      cur = body.pos;
+      set('body', cur, 'hit');
+    } else set('body', cur, body.ran ? 'ran' : 'skipped');
+    labels.body = body.label;
+    if (body.detail) detail.body = body.detail;
+    const mb = ev(r, 'movebg');
+    if (mb) {
+      cur = mb.pos;
+      set('movebg', cur, 'hit');
+    } else set('movebg', cur, 'skipped');
     const l1p = ev(r, 'line1_post');
     for (let k = 0; k < 3; k++) {
       const ln = r.lines ? r.lines[k] : null;
@@ -575,6 +600,50 @@
     return Math.hypot(b[0] - a[0], b[2] - a[2]);
   }
 
+  function bodyLineName(e) {
+    if (e.kind === 'swim') return e.pass + ' line';
+    return `${e.pass} ${e.i === 0 ? 'back' : 'front'} ${e.height}`;
+  }
+
+  function bodyLineText(e) {
+    const what = e.line_hit
+      ? e.poly
+        ? `hit ${kindOf(e.poly.normal)} bg ${e.poly.bg} poly ${e.poly.poly}`
+        : 'hit'
+      : 'miss';
+    let res = '';
+    if (e.result && e.push) res = `, push ${flatDistance([0, 0, 0], e.push).toPrecision(4)}`;
+    else if (e.line_hit && !e.result && e.kind !== 'swim') res = ', rejected';
+    return `${bodyLineName(e)}: ${what}${res}`;
+  }
+
+  function bodyStep(r) {
+    const pm = ev(r, 'posmove_post');
+    const cp = ev(r, 'crr_pre');
+    const pre = ev(r, 'body_check_pre');
+    const post = ev(r, 'body_check_post');
+    const kind = (post && post.kind) || (pre && pre.kind) || null;
+    const from = pm ? pm.pos : null;
+    const pos = cp ? cp.pos : from;
+    const moved = !!(from && pos && !same(from, pos));
+    const ran = post ? !post.skipped : moved;
+    const lines = (r.fr.body_line || []).map(bodyLineText);
+    const parts = [];
+    if (moved) parts.push('moved ' + flatDistance(from, pos).toPrecision(6));
+    if (post && post.skipped) parts.push('skipped by its mode or action check');
+    parts.push(...lines);
+    if (moved && !post) parts.push('no line details in this recording');
+    return {
+      from,
+      pos,
+      moved,
+      ran,
+      kind,
+      label: kind ? kind + ' check' : 'wolf/swim check',
+      detail: parts.join('<br>'),
+    };
+  }
+
   function kindOf(normal) {
     if (normal[1] >= 0.5) return 'floor';
     return normal[1] < -0.8 ? 'ceiling' : 'wall';
@@ -613,6 +682,8 @@
         if (same(e.pos_before, e.pos_after)) return;
         steps.push({
           pos: e.pos_after,
+          from: e.pos_before,
+          cir: e,
           label: `${CIR[e.circle]}: ${kindOf(e.normal)} ${e.poly}`,
           detail: wallCirDetail(e),
         });
@@ -620,6 +691,8 @@
         const moved = flatDistance(pre.pos, e.pos).toPrecision(6);
         steps.push({
           pos: e.pos,
+          from: pre.pos,
+          bg: e.bg,
           label: `object bg ${e.bg}`,
           detail: `object wall push, bg ${e.bg}${ownerText(e)}, moved ${moved}`,
         });
@@ -846,6 +919,14 @@
       return;
     }
     const cols = buildColumns(rows, $('hideUnused').checked);
+    latest = { rows, cols };
+    if (ui.tab === 'map') {
+      $('status').textContent = '';
+      buildMapSteps();
+      renderMap();
+      saveSettings();
+      return;
+    }
     const nc = cols.length;
     const X = (j, ci) => j * (nc + 1) + ci;
     const xmax = X(rows.length - 1, nc - 1);
@@ -927,7 +1008,7 @@
     };
 
     const procs = [];
-    const procColors = [C.act, C.hi, C.floor, C.wall, C.roof, C.mid, C.low, C.top];
+    const procColors = [C.act, C.hi, C.floor, C.wall, C.on, C.mid, C.low, C.top];
     rows.forEach((r, j) => {
       if (!procs.includes(r.proc)) procs.push(r.proc);
       const hit = (r.lines || []).some((l) => l.hit);
@@ -1499,6 +1580,941 @@
     saveSettings();
   }
 
+  const mapState = { steps: [], idx: 0, timer: null, wantFrame: null, zoom: null, cam3d: null };
+
+  const PROJ = {
+    top: { u: 0, v: 2, un: 'x', vn: 'z' },
+    front: { u: 0, v: 1, un: 'x', vn: 'y' },
+    side: { u: 2, v: 1, un: 'z', vn: 'y' },
+  };
+
+  function stepKind(key) {
+    if (key === 'move' || key === 'body' || key === 'movebg' || key === 'lc2') return key;
+    if (/^(line|hitA|hitB)\d$/.test(key) || key === 'ldown') return 'line';
+    if (/^(wp|wall)\d+$/.test(key)) return 'wall';
+    if (key === 'roof' || key === 'clamp') return 'roof';
+    if (key === 'ground') return 'ground';
+    return 'other';
+  }
+
+  function stepColor(kind, C) {
+    return (
+      {
+        move: C.feet,
+        body: C.hi,
+        movebg: C.act,
+        line: C.on,
+        wall: C.wall,
+        lc2: C.mid,
+        roof: C.roof,
+        ground: C.floor,
+      }[kind] || C.muted
+    );
+  }
+
+  function esc(t) {
+    return String(t).replace(
+      /[&<>"]/g,
+      (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch],
+    );
+  }
+
+  function showTab() {
+    const map = ui.tab === 'map';
+    $('stepsView').hidden = map;
+    $('mapView').hidden = !map;
+    $('tabSteps').setAttribute('aria-selected', String(!map));
+    $('tabMap').setAttribute('aria-selected', String(map));
+  }
+
+  function setTab(t) {
+    ui.tab = t;
+    stopPlay();
+    showTab();
+    render();
+  }
+
+  function buildMapSteps() {
+    const prev = mapState.steps[mapState.idx];
+    const keep = prev ? { f: prev.r.f, key: prev.key } : null;
+    const movedOnly = $('mapMoved').checked;
+    const steps = [];
+    let carry = null;
+    if (latest)
+      latest.rows.forEach((r) => {
+        let last = null;
+        latest.cols.forEach((c) => {
+          const st = r.st[c.key];
+          const pos = r.pts[c.key];
+          if (!st || st === 'skipped' || !pos) return;
+          const from = last ? last.pos : carry || pos;
+          const s = {
+            r,
+            c,
+            key: c.key,
+            st,
+            pos,
+            from,
+            moved: !same(from, pos),
+            label: (r.labels && r.labels[c.key]) || c.label,
+          };
+          last = s;
+          if (movedOnly && !s.moved && c.key !== 'start') return;
+          steps.push(s);
+        });
+        if (last) carry = last.pos;
+      });
+    mapState.steps = steps;
+    let idx = 0;
+    if (mapState.wantFrame !== null) {
+      const i = steps.findIndex((s) => s.r.f >= mapState.wantFrame);
+      idx = i < 0 ? 0 : i;
+      mapState.wantFrame = null;
+    } else if (keep) {
+      const exact = steps.findIndex((s) => s.r.f === keep.f && s.key === keep.key);
+      const frame = steps.findIndex((s) => s.r.f >= keep.f);
+      idx = exact >= 0 ? exact : frame >= 0 ? frame : 0;
+    }
+    mapState.idx = idx;
+    const seek = $('mapSeek');
+    seek.max = Math.max(0, steps.length - 1);
+    seek.value = idx;
+  }
+
+  function linkCircles(r) {
+    const crr = ev(r, 'crr_pre');
+    return crr && crr.circles ? crr.circles : [];
+  }
+
+  function circleCenters(r, pos) {
+    return linkCircles(r).map((c, i) => {
+      const p = [pos[0], pos[1] + c.h, pos[2]];
+      return {
+        i,
+        p,
+        text: `${CIR[i]} circle center, ${c.h} above feet, radius ${c.r}<br>${p.map((v) => v.toFixed(3)).join(', ')}`,
+      };
+    });
+  }
+
+  function bodyTop(r) {
+    return Math.max(linkHeight(r), ...linkCircles(r).map((c) => c.h));
+  }
+
+  function linkHeight(r) {
+    const f = ev(r, 'frame');
+    return f && typeof f.height === 'number' ? f.height : 150;
+  }
+
+  function stepPolys(s) {
+    const r = s.r;
+    const out = [];
+    const add = (p) => {
+      if (p && p.tri && p.normal) out.push(p);
+    };
+    const kind = stepKind(s.key);
+    if (kind === 'body') (r.fr.body_line || []).forEach((e) => e.line_hit && add(e.poly));
+    if (kind === 'line') {
+      const m = /(\d)$/.exec(s.key);
+      if (s.key === 'ldown') {
+        const ld = ev(r, 'line_down');
+        if (ld) add(ld.poly);
+      } else if (m && r.lines && r.lines[+m[1]] && r.lines[+m[1]].hit) add(r.lines[+m[1]].poly);
+    }
+    if (kind === 'wall') {
+      const m = /(\d+)$/.exec(s.key);
+      const push = r.pushes && m ? r.pushes[+m[1]] : null;
+      if (push && push.cir)
+        add({ normal: push.cir.normal, tri: push.cir.tri, bg: push.cir.bg, poly: push.cir.poly });
+      const wp = ev(r, 'wall_post');
+      if (wp)
+        wp.circles.forEach((c) => {
+          if (c.hit && (!push || push.bg === undefined || c.hit.bg === push.bg)) add(c.hit);
+        });
+    }
+    if (kind === 'lc2')
+      (r.fr.line_cir || []).forEach((e) => e.pass === 'line2' && e.hit && add(e.poly));
+    if (kind === 'ground') {
+      const g = ev(r, 'ground_post');
+      if (g) add(g.found);
+    }
+    if (kind === 'roof') {
+      const rf = ev(r, 'roof');
+      if (rf) add(rf.hit);
+    }
+    return out;
+  }
+
+  function stepSegments(s) {
+    const r = s.r;
+    const kind = stepKind(s.key);
+    const segs = [];
+    if (kind === 'body')
+      (r.fr.body_line || []).forEach((e) =>
+        segs.push({
+          a: e.start,
+          b: e.end,
+          cross: e.line_hit ? e.cross : null,
+          on: !!e.result,
+          text: bodyLineText(e),
+        }),
+      );
+    if (kind === 'line') {
+      if (s.key === 'ldown') {
+        const ld = ev(r, 'line_down');
+        if (ld)
+          segs.push({
+            a: ld.start,
+            b: ld.end,
+            cross: ld.hit ? ld.pos_after : null,
+            on: !!ld.hit,
+            text: 'line down',
+          });
+      } else {
+        const m = /(\d)$/.exec(s.key);
+        const ln = m && r.lines ? r.lines[+m[1]] : null;
+        if (ln && ln.start && ln.end)
+          segs.push({
+            a: ln.start,
+            b: ln.end,
+            cross: ln.hit && ln.cross ? ln.cross : null,
+            on: !!ln.hit,
+            text: CIR[ln.i] + ' line check' + (ln.hit ? ', hit' : ', no hit'),
+          });
+      }
+    }
+    if (kind === 'lc2')
+      (r.fr.line_cir || [])
+        .filter((e) => e.pass === 'line2' && e.start && e.end)
+        .forEach((e) =>
+          segs.push({
+            a: e.start,
+            b: e.end,
+            cross: e.hit && e.cross ? e.cross : null,
+            on: !!e.hit,
+            text: CIR[e.i] + ' line check 2' + (e.hit ? ', hit' : ', no hit'),
+          }),
+        );
+    return segs;
+  }
+
+  function pusherLines(s, radius) {
+    const r = s.r;
+    const m = /(\d+)$/.exec(s.key);
+    const push = r.pushes && m ? r.pushes[+m[1]] : null;
+    const out = [];
+    if (push && push.cir && push.cir.pusher) {
+      const [x0, z0, x1, z1] = push.cir.pusher;
+      out.push({ a: [x0, 0, z0], b: [x1, 0, z1] });
+      return out;
+    }
+    const bg = push && push.bg !== undefined ? push.bg : null;
+    if (bg === null) return out;
+    const nb = ev(r, 'nearby');
+    (nb && nb.polys ? nb.polys : []).forEach((p) => {
+      if (p.bg !== bg || Math.abs(p.normal[1]) >= 0.5) return;
+      const flat = Math.hypot(p.normal[0], p.normal[2]);
+      if (flat < 1e-6) return;
+      const ahead =
+        (p.normal[0] * s.from[0] + p.normal[2] * s.from[2] + p.normal[1] * p.tri[0][1] + p.d) /
+        flat;
+      if (ahead < -radius || ahead > radius * 3) return;
+      let best = null;
+      for (let i = 0; i < 3; i++)
+        for (let j = i + 1; j < 3; j++) {
+          const d = flatDistance(p.tri[i], p.tri[j]);
+          if (!best || d > best.d) best = { d, a: p.tri[i], b: p.tri[j] };
+        }
+      if (!best || best.d < 1e-3) return;
+      const ox = (radius * p.normal[0]) / flat;
+      const oz = (radius * p.normal[2]) / flat;
+      out.push({ a: [best.a[0] + ox, 0, best.a[2] + oz], b: [best.b[0] + ox, 0, best.b[2] + oz] });
+    });
+    return out;
+  }
+
+  function mapInfo(s, C) {
+    const r = s.r;
+    const inFrame = mapState.steps.filter((t) => t.r === r);
+    const n = inFrame.indexOf(s) + 1;
+    const d = [0, 1, 2].map((i) => s.pos[i] - s.from[i]);
+    const detail = r.detail && r.detail[s.key] ? r.detail[s.key].split('<br>') : [];
+    const rows = [
+      ['Frame', r.f + ', ' + procName(r.proc)],
+      ['Step', `${n} of ${inFrame.length}: ${s.label}`],
+      ['Result', s.st],
+      ['Position', s.pos.map((v) => v.toFixed(3)).join(', ')],
+      [
+        'Moved',
+        d.map((v) => (v >= 0 ? '+' : '') + v.toFixed(3)).join(', ') +
+          `  (flat ${flatDistance(s.from, s.pos).toFixed(3)})`,
+      ],
+    ];
+    const html =
+      `<div class="mi-step" style="border-color:${stepColor(stepKind(s.key), C)}">${esc(s.label)}</div>` +
+      '<dl>' +
+      rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('') +
+      '</dl>' +
+      (detail.length
+        ? '<h3>Detail</h3><ul>' + detail.map((t) => `<li>${esc(t)}</li>`).join('') + '</ul>'
+        : '');
+    $('mapInfo').innerHTML = html;
+  }
+
+  function polyGroups(polys, C) {
+    const groups = { floor: [], wall: [], ceiling: [] };
+    polys.forEach((p) => {
+      if (p.tri) groups[kindOf(p.normal)].push(p);
+    });
+    return [
+      ['floors', C.floor, groups.floor],
+      ['walls', C.wall, groups.wall],
+      ['ceilings', C.roof, groups.ceiling],
+    ];
+  }
+
+  function polyText(p) {
+    const n = p.normal;
+    return `${kindOf(n)}, ${polyId(p)}<br>normal (${n.map((v) => v.toFixed(4)).join(', ')})`;
+  }
+
+  function renderMap() {
+    const el = $('map');
+    const steps = mapState.steps;
+    if (!steps.length) {
+      Plotly.purge(el);
+      $('mapInfo').textContent = 'No steps in this frame range.';
+      $('mapStep').textContent = '';
+      return;
+    }
+    mapState.idx = Math.min(Math.max(0, mapState.idx), steps.length - 1);
+    const s = steps[mapState.idx];
+    $('mapSeek').value = mapState.idx;
+    $('mapStep').textContent = `frame ${s.r.f}, ${s.label} (${mapState.idx + 1}/${steps.length})`;
+    const C = colors();
+    mapInfo(s, C);
+    if ($('mapProj').value === 'ortho' || $('mapProj').value === 'persp') renderMap3d(s, C);
+    else renderMap2d(s, C);
+  }
+
+  function renderMap2d(s, C) {
+    const P = PROJ[$('mapProj').value] || PROJ.top;
+    const U = (p) => p[P.u];
+    const V = (p) => p[P.v];
+    const r = s.r;
+    const traces = [];
+    const shapes = [];
+    const ann = [];
+    polyGroups(
+      polysOf(r).map((o) => o.p),
+      C,
+    ).forEach(([name, col, list]) => {
+      if (!list.length) return;
+      const x = [];
+      const y = [];
+      const text = [];
+      list.forEach((p) => {
+        [0, 1, 2, 0].forEach((i) => {
+          x.push(U(p.tri[i]));
+          y.push(V(p.tri[i]));
+          text.push(polyText(p));
+        });
+        x.push(null);
+        y.push(null);
+        text.push(null);
+      });
+      traces.push({
+        type: 'scatter',
+        mode: 'lines',
+        x,
+        y,
+        text,
+        hoverinfo: 'text',
+        fill: 'toself',
+        fillcolor: rgba(col, 0.1),
+        line: { color: rgba(col, 0.8), width: 1 },
+        name,
+      });
+    });
+    const hl = stepPolys(s);
+    if (hl.length) {
+      const x = [];
+      const y = [];
+      const text = [];
+      hl.forEach((p) => {
+        [0, 1, 2, 0].forEach((i) => {
+          x.push(U(p.tri[i]));
+          y.push(V(p.tri[i]));
+          text.push(polyText(p));
+        });
+        x.push(null);
+        y.push(null);
+        text.push(null);
+      });
+      traces.push({
+        type: 'scatter',
+        mode: 'lines',
+        x,
+        y,
+        text,
+        hoverinfo: 'text',
+        line: { color: C.fg, width: 3 },
+        name: 'surfaces this step used',
+      });
+    }
+    const rows = latest.rows;
+    const ri = rows.indexOf(r);
+    const ends = rows
+      .slice(0, ri)
+      .map((q) => (ev(q, 'frame_end') || ev(q, 'crr_post') || {}).pos)
+      .filter(Boolean);
+    if (ends.length)
+      traces.push({
+        type: 'scatter',
+        mode: 'lines+markers',
+        x: ends.map(U),
+        y: ends.map(V),
+        line: { color: C.muted, width: 1, dash: 'dot' },
+        marker: { size: 4, color: C.muted },
+        hoverinfo: 'skip',
+        name: 'earlier frame ends',
+      });
+    const trail = mapState.steps.filter((t, i) => t.r === r && i <= mapState.idx).map((t) => t.pos);
+    const first = ev(r, 'frame').pos;
+    traces.push({
+      type: 'scatter',
+      mode: 'lines',
+      x: [U(first), ...trail.map(U)],
+      y: [V(first), ...trail.map(V)],
+      line: { color: rgba(C.feet, 0.5), width: 1.5 },
+      hoverinfo: 'skip',
+      name: 'this frame so far',
+    });
+    const radius = linkCircles(r).length ? linkCircles(r)[0].r : 35;
+    const kind = stepKind(s.key);
+    const ccol = [C.low, C.mid, C.top];
+    if (P.v === 2) {
+      if (kind === 'wall' && s.moved)
+        shapes.push({
+          type: 'circle',
+          x0: U(s.from) - radius,
+          x1: U(s.from) + radius,
+          y0: V(s.from) - radius,
+          y1: V(s.from) + radius,
+          line: { color: rgba(C.fg, 0.5), width: 1, dash: 'dot' },
+        });
+      const cir = linkCircles(r);
+      const oneRadius = cir.every((c) => Math.abs(c.r - cir[0].r) < 1e-4);
+      (oneRadius ? cir.slice(0, 1) : cir).forEach((c, i) =>
+        shapes.push({
+          type: 'circle',
+          x0: U(s.pos) - c.r,
+          x1: U(s.pos) + c.r,
+          y0: V(s.pos) - c.r,
+          y1: V(s.pos) + c.r,
+          line: { color: oneRadius ? C.feet : ccol[i % 3], width: 1.2 },
+          fillcolor: i === 0 ? rgba(C.feet, 0.05) : 'rgba(0,0,0,0)',
+        }),
+      );
+      if (kind === 'wall')
+        pusherLines(s, radius).forEach((q) =>
+          traces.push({
+            type: 'scatter',
+            mode: 'lines',
+            x: [U(q.a), U(q.b)],
+            y: [V(q.a), V(q.b)],
+            line: { color: C.wall, width: 1.5, dash: 'dash' },
+            hoverinfo: 'skip',
+            name: 'pushers',
+            legendgroup: 'pushers',
+            showlegend: false,
+          }),
+        );
+    } else {
+      const h = linkHeight(r);
+      shapes.push({
+        type: 'line',
+        x0: U(s.pos),
+        x1: U(s.pos),
+        y0: V(s.pos),
+        y1: V(s.pos) + h,
+        line: { color: rgba(C.feet, 0.6), width: 1 },
+      });
+      linkCircles(r).forEach((c, i) =>
+        shapes.push({
+          type: 'line',
+          x0: U(s.pos) - c.r,
+          x1: U(s.pos) + c.r,
+          y0: V(s.pos) + c.h,
+          y1: V(s.pos) + c.h,
+          line: { color: ccol[i % 3], width: 2 },
+        }),
+      );
+      const g = ev(r, 'ground_post');
+      if (kind === 'ground' && g && fin(g.ground_h) !== null)
+        shapes.push({
+          type: 'line',
+          x0: U(s.pos) - radius * 2,
+          x1: U(s.pos) + radius * 2,
+          y0: g.ground_h,
+          y1: g.ground_h,
+          line: { color: C.floor, width: 1.5, dash: 'dash' },
+        });
+    }
+    stepSegments(s).forEach((q) => {
+      traces.push({
+        type: 'scatter',
+        mode: 'lines',
+        x: [U(q.a), U(q.b)],
+        y: [V(q.a), V(q.b)],
+        line: { color: q.on ? C.hi : C.muted, width: q.on ? 2 : 1.2, dash: q.on ? 'solid' : 'dot' },
+        text: [q.text, q.text],
+        hoverinfo: 'text',
+        showlegend: false,
+      });
+      if (q.cross)
+        traces.push({
+          type: 'scatter',
+          mode: 'markers',
+          x: [U(q.cross)],
+          y: [V(q.cross)],
+          marker: { symbol: 'x-thin', size: 11, line: { width: 2, color: q.on ? C.hi : C.muted } },
+          text: [q.text],
+          hoverinfo: 'text',
+          showlegend: false,
+        });
+    });
+    if (s.moved)
+      ann.push({
+        x: U(s.pos),
+        y: V(s.pos),
+        ax: U(s.from),
+        ay: V(s.from),
+        xref: 'x',
+        yref: 'y',
+        axref: 'x',
+        ayref: 'y',
+        showarrow: true,
+        arrowhead: 2,
+        arrowsize: 1.2,
+        arrowwidth: 2,
+        arrowcolor: stepColor(kind, C),
+        text: '',
+      });
+    const centers = circleCenters(r, s.pos);
+    if (centers.length)
+      traces.push({
+        type: 'scatter',
+        mode: 'markers',
+        x: centers.map((q) => U(q.p)),
+        y: centers.map((q) => V(q.p)),
+        marker: {
+          size: 7,
+          color: centers.map((q) => ccol[q.i % 3]),
+          line: { color: C.bg, width: 1 },
+        },
+        text: centers.map((q) => q.text),
+        hoverinfo: 'text',
+        name: 'circle centers',
+      });
+    traces.push({
+      type: 'scatter',
+      mode: 'markers',
+      x: [U(s.pos)],
+      y: [V(s.pos)],
+      marker: { size: 8, color: C.fg, line: { color: C.bg, width: 1 } },
+      text: [`frame ${r.f}, ${s.label}<br>${s.pos.map((v) => v.toFixed(3)).join(', ')}`],
+      hoverinfo: 'text',
+      name: 'Link',
+    });
+    const follow = $('mapFollow').checked;
+    const span = Math.max(1, parseFloat($('mapSpan').value) || 200);
+    const axis = (title) => ({
+      title,
+      gridcolor: C.grid,
+      zerolinecolor: C.line,
+      color: C.muted,
+      tickfont: { size: 10 },
+      tickformat: '.0f',
+    });
+    const layout = {
+      height: 640,
+      margin: { l: 70, r: 16, t: 16, b: 50 },
+      paper_bgcolor: C.panel,
+      plot_bgcolor: C.panel,
+      font: { family: css('--font-mono') || 'monospace', color: C.fg, size: 11 },
+      showlegend: true,
+      legend: { orientation: 'h', x: 0, y: -0.09, font: { size: 10 } },
+      hovermode: 'closest',
+      hoverlabel: { bgcolor: C.raise, bordercolor: C.act, font: { size: 11, color: C.fg } },
+      xaxis: axis(P.un),
+      yaxis: Object.assign(axis(P.vn), { scaleanchor: 'x', scaleratio: 1 }),
+      shapes,
+      annotations: ann,
+      uirevision: follow ? 'follow' + mapState.idx : 'map-' + $('mapProj').value,
+    };
+    const zoom = mapState.zoom && mapState.zoom.proj === $('mapProj').value ? mapState.zoom : null;
+    if (follow && zoom) {
+      const cu = U(s.pos) + zoom.du;
+      const cv = V(s.pos) + zoom.dv;
+      layout.xaxis.range = [cu - zoom.w / 2, cu + zoom.w / 2];
+      layout.yaxis.range = [cv - zoom.h / 2, cv + zoom.h / 2];
+    } else if (follow) {
+      const tall = P.v === 1 ? bodyTop(r) : 0;
+      const view = Math.max(span, tall + 100);
+      const cv = V(s.pos) + tall / 2;
+      layout.xaxis.range = [U(s.pos) - view / 2, U(s.pos) + view / 2];
+      layout.yaxis.range = [cv - view / 2, cv + view / 2];
+    }
+    const el = $('map');
+    Plotly.react(el, traces, layout, {
+      responsive: true,
+      displaylogo: false,
+      scrollZoom: true,
+      modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+    });
+    hookMapZoom(el);
+  }
+
+  function hookMapZoom(el) {
+    if (!el.mapZoomHooked && el.on) {
+      el.mapZoomHooked = true;
+      el.on('plotly_relayout', (e) => rememberZoom(e));
+    }
+  }
+
+  function rememberZoom(e) {
+    const proj = $('mapProj').value;
+    if (e && Object.keys(e).some((k) => k.startsWith('scene'))) {
+      const sc = ($('map').layout && $('map').layout.scene) || {};
+      mapState.cam3d = {
+        proj,
+        camera: sc.camera ? JSON.parse(JSON.stringify(sc.camera)) : null,
+        aspectratio: sc.aspectratio ? Object.assign({}, sc.aspectratio) : null,
+      };
+      return;
+    }
+    const P = PROJ[proj];
+    const s = mapState.steps[mapState.idx];
+    if (!P || !s || !e) return;
+    if (e['xaxis.autorange'] || e['yaxis.autorange']) {
+      mapState.zoom = null;
+      return;
+    }
+    const touched = Object.keys(e).some((k) => /^[xy]axis\.range/.test(k));
+    const L = $('map').layout;
+    if (!touched || !L || !L.xaxis || !L.yaxis) return;
+    const xr = L.xaxis.range;
+    const yr = L.yaxis.range;
+    mapState.zoom = {
+      proj,
+      w: xr[1] - xr[0],
+      h: yr[1] - yr[0],
+      du: (xr[0] + xr[1]) / 2 - s.pos[P.u],
+      dv: (yr[0] + yr[1]) / 2 - s.pos[P.v],
+    };
+  }
+
+  function renderMap3d(s, C) {
+    const r = s.r;
+    const traces = [];
+    const X = (p) => p[0];
+    const Y = (p) => p[2];
+    const Z = (p) => p[1];
+    const mesh = (list, col, opacity, name) => {
+      if (!list.length) return;
+      const x = [];
+      const y = [];
+      const z = [];
+      const i = [];
+      const j = [];
+      const k = [];
+      const text = [];
+      list.forEach((p) => {
+        const b = x.length;
+        p.tri.forEach((v) => {
+          x.push(X(v));
+          y.push(Y(v));
+          z.push(Z(v));
+          text.push(polyText(p));
+        });
+        i.push(b);
+        j.push(b + 1);
+        k.push(b + 2);
+      });
+      traces.push({
+        type: 'mesh3d',
+        x,
+        y,
+        z,
+        i,
+        j,
+        k,
+        color: col,
+        opacity,
+        flatshading: true,
+        name,
+        showlegend: true,
+        text,
+        hoverinfo: 'text',
+        legendgroup: name,
+      });
+      const ex = [];
+      const ey = [];
+      const ez = [];
+      list.forEach((p) => {
+        [0, 1, 2, 0].forEach((n) => {
+          ex.push(X(p.tri[n]));
+          ey.push(Y(p.tri[n]));
+          ez.push(Z(p.tri[n]));
+        });
+        ex.push(null);
+        ey.push(null);
+        ez.push(null);
+      });
+      traces.push({
+        type: 'scatter3d',
+        mode: 'lines',
+        x: ex,
+        y: ey,
+        z: ez,
+        line: { color: opacity > 0.5 ? col : rgba(C.fg, 0.45), width: opacity > 0.5 ? 4 : 2 },
+        hoverinfo: 'skip',
+        legendgroup: name,
+        showlegend: false,
+      });
+    };
+    polyGroups(
+      polysOf(r).map((o) => o.p),
+      C,
+    ).forEach(([name, col, list]) => mesh(list, col, 0.35, name));
+    mesh(stepPolys(s), C.fg, 0.85, 'surfaces this step used');
+    const trail = mapState.steps.filter((t, i) => t.r === r && i <= mapState.idx).map((t) => t.pos);
+    const first = ev(r, 'frame').pos;
+    const path = [first, ...trail];
+    traces.push({
+      type: 'scatter3d',
+      mode: 'lines',
+      x: path.map(X),
+      y: path.map(Y),
+      z: path.map(Z),
+      line: { color: C.feet, width: 4 },
+      hoverinfo: 'skip',
+      name: 'this frame so far',
+    });
+    const ccol = [C.low, C.mid, C.top];
+    linkCircles(r).forEach((c, ci) => {
+      const ring = [];
+      for (let t = 0; t <= 32; t++) {
+        const a = (t / 32) * Math.PI * 2;
+        ring.push([s.pos[0] + c.r * Math.cos(a), s.pos[1] + c.h, s.pos[2] + c.r * Math.sin(a)]);
+      }
+      traces.push({
+        type: 'scatter3d',
+        mode: 'lines',
+        x: ring.map(X),
+        y: ring.map(Y),
+        z: ring.map(Z),
+        line: { color: ccol[ci % 3], width: 3 },
+        hoverinfo: 'skip',
+        name: CIR[ci] + ' circle',
+      });
+    });
+    stepSegments(s).forEach((q) => {
+      traces.push({
+        type: 'scatter3d',
+        mode: 'lines',
+        x: [X(q.a), X(q.b)],
+        y: [Y(q.a), Y(q.b)],
+        z: [Z(q.a), Z(q.b)],
+        line: { color: q.on ? C.hi : C.muted, width: q.on ? 5 : 3 },
+        text: [q.text, q.text],
+        hoverinfo: 'text',
+        showlegend: false,
+      });
+      if (q.cross)
+        traces.push({
+          type: 'scatter3d',
+          mode: 'markers',
+          x: [X(q.cross)],
+          y: [Y(q.cross)],
+          z: [Z(q.cross)],
+          marker: { size: 4, color: q.on ? C.hi : C.muted, symbol: 'x' },
+          hoverinfo: 'skip',
+          showlegend: false,
+        });
+    });
+    const centers = circleCenters(r, s.pos);
+    if (centers.length)
+      traces.push({
+        type: 'scatter3d',
+        mode: 'markers',
+        x: centers.map((q) => X(q.p)),
+        y: centers.map((q) => Y(q.p)),
+        z: centers.map((q) => Z(q.p)),
+        marker: { size: 4, color: centers.map((q) => ccol[q.i % 3]) },
+        text: centers.map((q) => q.text),
+        hoverinfo: 'text',
+        name: 'circle centers',
+      });
+    traces.push({
+      type: 'scatter3d',
+      mode: 'markers',
+      x: [X(s.pos)],
+      y: [Y(s.pos)],
+      z: [Z(s.pos)],
+      marker: { size: 5, color: C.fg },
+      text: [`frame ${r.f}, ${s.label}`],
+      hoverinfo: 'text',
+      name: 'Link',
+    });
+    const follow = $('mapFollow').checked;
+    const span = Math.max(1, parseFloat($('mapSpan').value) || 200);
+    const tall = bodyTop(r);
+    const view = Math.max(span, tall + 100);
+    const axis = (title, c) =>
+      Object.assign(
+        {
+          title,
+          gridcolor: C.grid,
+          color: C.muted,
+          backgroundcolor: C.panel,
+          showbackground: false,
+          tickformat: '.0f',
+        },
+        follow ? { range: [c - view / 2, c + view / 2] } : {},
+      );
+    const proj = $('mapProj').value;
+    const cam = mapState.cam3d && mapState.cam3d.proj === proj ? mapState.cam3d : null;
+    const camera = Object.assign(
+      { up: { x: 0, y: 0, z: 1 }, eye: { x: 1.3, y: 1.3, z: 1.3 } },
+      cam && cam.camera ? cam.camera : {},
+      { projection: { type: proj === 'persp' ? 'perspective' : 'orthographic' } },
+    );
+    const el = $('map');
+    Plotly.react(
+      el,
+      traces,
+      {
+        height: 640,
+        margin: { l: 0, r: 0, t: 0, b: 0 },
+        paper_bgcolor: C.panel,
+        font: { family: css('--font-mono') || 'monospace', color: C.fg, size: 11 },
+        legend: { orientation: 'h', x: 0, y: 0, font: { size: 10 } },
+        hoverlabel: { bgcolor: C.raise, bordercolor: C.act, font: { size: 11, color: C.fg } },
+        uirevision: 'map3d-' + $('mapProj').value,
+        scene: {
+          aspectmode: cam && cam.aspectratio ? 'manual' : follow ? 'cube' : 'data',
+          aspectratio: cam && cam.aspectratio ? cam.aspectratio : undefined,
+          bgcolor: C.panel,
+          camera,
+          xaxis: axis('x', X(s.pos)),
+          yaxis: axis('z', Y(s.pos)),
+          zaxis: axis('y (up)', Z(s.pos) + tall / 2),
+          uirevision: 'map3d-' + $('mapProj').value,
+        },
+      },
+      { responsive: true, displaylogo: false },
+    );
+    hookMapZoom(el);
+  }
+
+  function seekTo(i) {
+    if (!mapState.steps.length) return;
+    mapState.idx = Math.min(Math.max(0, i), mapState.steps.length - 1);
+    renderMap();
+  }
+
+  function seekFrame(dir) {
+    const steps = mapState.steps;
+    if (!steps.length) return;
+    const f = steps[mapState.idx].r.f;
+    if (dir > 0) {
+      const i = steps.findIndex((s) => s.r.f > f);
+      if (i >= 0) seekTo(i);
+    } else {
+      const startHere = steps.findIndex((s) => s.r.f === f);
+      if (mapState.idx > startHere) seekTo(startHere);
+      else {
+        const prevF = [...steps].reverse().find((s) => s.r.f < f);
+        if (prevF) seekTo(steps.findIndex((s) => s.r.f === prevF.r.f));
+      }
+    }
+  }
+
+  function stopPlay() {
+    if (mapState.timer) clearInterval(mapState.timer);
+    mapState.timer = null;
+    $('mapPlay').textContent = 'Play';
+  }
+
+  function togglePlay() {
+    if (mapState.timer) {
+      stopPlay();
+      return;
+    }
+    if (mapState.idx >= mapState.steps.length - 1) mapState.idx = 0;
+    $('mapPlay').textContent = 'Pause';
+    mapState.timer = setInterval(
+      () => {
+        if (mapState.idx >= mapState.steps.length - 1) {
+          stopPlay();
+          return;
+        }
+        seekTo(mapState.idx + 1);
+      },
+      Math.max(30, parseInt($('mapSpeed').value, 10) || 250),
+    );
+  }
+
+  function buildMapControls() {
+    $('tabSteps').addEventListener('click', () => setTab('steps'));
+    $('tabMap').addEventListener('click', () => setTab('map'));
+    $('mapSeek').addEventListener('input', () => seekTo(parseInt($('mapSeek').value, 10)));
+    $('mapPrev').addEventListener('click', () => seekTo(mapState.idx - 1));
+    $('mapNext').addEventListener('click', () => seekTo(mapState.idx + 1));
+    $('mapPrevF').addEventListener('click', () => seekFrame(-1));
+    $('mapNextF').addEventListener('click', () => seekFrame(1));
+    $('mapPlay').addEventListener('click', togglePlay);
+    ['mapProj', 'mapFollow', 'mapSpan'].forEach((id) =>
+      $(id).addEventListener('change', () => {
+        mapState.zoom = null;
+        mapState.cam3d = null;
+        renderMap();
+        saveSettings();
+      }),
+    );
+    $('mapMoved').addEventListener('change', () => {
+      buildMapSteps();
+      renderMap();
+      saveSettings();
+    });
+    $('mapSpeed').addEventListener('change', () => {
+      if (mapState.timer) {
+        stopPlay();
+        togglePlay();
+      }
+      saveSettings();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (ui.tab !== 'map' || !log) return;
+      const t = e.target;
+      if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) && t.id !== 'mapSeek') return;
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (e.shiftKey) seekFrame(1);
+        else seekTo(mapState.idx + 1);
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (e.shiftKey) seekFrame(-1);
+        else seekTo(mapState.idx - 1);
+      } else if (e.key === ' ' && t.tagName !== 'BUTTON') {
+        e.preventDefault();
+        togglePlay();
+      }
+    });
+  }
+
   const SETTINGS_KEY = 'tp-collision-log-viewer.settings';
 
   function gatherSettings() {
@@ -1513,6 +2529,14 @@
       stripChecks: $('stripChecks').checked,
       stripState: $('stripState').checked,
       hideUnused: $('hideUnused').checked,
+      tab: ui.tab,
+      map: {
+        proj: $('mapProj').value,
+        span: $('mapSpan').value,
+        follow: $('mapFollow').checked,
+        moved: $('mapMoved').checked,
+        speed: $('mapSpeed').value,
+      },
     };
     SERIES.forEach((x) => {
       s.series[x.id] = $('s_' + x.id).checked;
@@ -1563,6 +2587,15 @@
       $('stepPxOut').textContent = s.stepPx + ' px';
     }
     if (typeof s.refs === 'string') $('refs').value = s.refs;
+    if (s.tab === 'steps' || s.tab === 'map') ui.tab = s.tab;
+    if (s.map && typeof s.map === 'object') {
+      if (s.map.proj) $('mapProj').value = s.map.proj;
+      if (s.map.span) $('mapSpan').value = s.map.span;
+      if (typeof s.map.follow === 'boolean') $('mapFollow').checked = s.map.follow;
+      if (typeof s.map.moved === 'boolean') $('mapMoved').checked = s.map.moved;
+      if (s.map.speed) $('mapSpeed').value = s.map.speed;
+    }
+    showTab();
     if (s.f0 !== undefined) $('f0').value = s.f0;
     if (s.f1 !== undefined) $('f1').value = s.f1;
     syncAxisInputs();
@@ -1643,6 +2676,14 @@
         if (moved > 1)
           out.push({ f, k: moved > 50 ? 'hit' : '', t: `wall push ${moved.toFixed(1)}` });
       }
+      const pmB = fr.posmove_post && fr.posmove_post[0];
+      const crB = fr.crr_pre && fr.crr_pre[0];
+      if (pmB && crB) {
+        const moved = flatDistance(pmB.pos, crB.pos);
+        const kind = fr.body_check_post ? fr.body_check_post[0].kind : 'wolf/swim';
+        if (moved > 1)
+          out.push({ f, k: moved > 50 ? 'hit' : '', t: `${kind} check push ${moved.toFixed(1)}` });
+      }
       const pm = fr.posmove_post && fr.posmove_post[0];
       const cp = fr.crr_post && fr.crr_post[0];
       if (pm && cp) {
@@ -1682,6 +2723,7 @@
       ts.textContent = e.t;
       b.append(fs, ts);
       b.addEventListener('click', () => {
+        mapState.wantFrame = e.f;
         const span = Math.max(0, parseInt($('f1').value, 10) - parseInt($('f0').value, 10) || 4);
         const half = Math.floor(span / 2);
         $('f0').value = e.f - half;
@@ -1780,6 +2822,7 @@
       e.target.value = '';
     });
     $('export').addEventListener('click', exportView);
+    buildMapControls();
   }
 
   function syncAxisInputs() {

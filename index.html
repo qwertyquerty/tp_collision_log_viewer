@@ -74,7 +74,49 @@
     <div id="empty" class="empty">
       <p>Open or drop a <code>collision_*.jsonl</code> recording.</p>
     </div>
-    <div class="scroller"><div id="plot"></div></div>
+    <div class="tabs" role="tablist">
+      <button id="tabSteps" class="tab" type="button" role="tab" aria-selected="true">Steps</button>
+      <button id="tabMap" class="tab" type="button" role="tab" aria-selected="false">Map</button>
+    </div>
+    <div id="stepsView">
+      <div class="scroller"><div id="plot"></div></div>
+    </div>
+    <div id="mapView" hidden>
+      <div class="mapbar">
+        <label>View
+          <select id="mapProj">
+            <option value="top">Top down (x, z)</option>
+            <option value="front">Front (x, y)</option>
+            <option value="side">Side (z, y)</option>
+            <option value="ortho">3D orthographic</option>
+            <option value="persp">3D perspective</option>
+          </select>
+        </label>
+        <label>Span <input id="mapSpan" type="number" step="10" min="1" value="200"></label>
+        <label class="check"><input id="mapFollow" type="checkbox" checked> Follow Link</label>
+        <label class="check"><input id="mapMoved" type="checkbox"> Only steps that moved Link</label>
+        <label>Play speed
+          <select id="mapSpeed">
+            <option value="600">slow</option>
+            <option value="250" selected>normal</option>
+            <option value="80">fast</option>
+          </select>
+        </label>
+      </div>
+      <div class="timeline">
+        <button id="mapPlay" class="button small primary" type="button">Play</button>
+        <button id="mapPrevF" class="button small" type="button" title="Previous frame (shift + left)">Frame -</button>
+        <button id="mapPrev" class="button small" type="button" title="Previous step (left)">Step -</button>
+        <input id="mapSeek" type="range" min="0" max="0" step="1" value="0" aria-label="Timeline">
+        <button id="mapNext" class="button small" type="button" title="Next step (right)">Step +</button>
+        <button id="mapNextF" class="button small" type="button" title="Next frame (shift + right)">Frame +</button>
+      </div>
+      <p id="mapStep" class="note mapstep"></p>
+      <div class="mapbody">
+        <div id="map"></div>
+        <aside id="mapInfo" class="mapinfo"></aside>
+      </div>
+    </div>
     <p id="status" class="note"></p>
   </section>
 </main>
