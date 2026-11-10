@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Maddie's Super Cool Collision Analyzer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>Maddie's Super Cool Collision Analyzer</h1>
+  <div class="load">
+    <label class="button primary" for="file">Open recording</label>
+    <input id="file" type="file" accept=".jsonl,.json,.txt">
+    <button id="export" class="button" type="button" disabled>Export view</button>
+    <span id="meta" class="meta"></span>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="controls">
+    <section>
+      <h2>Frames</h2>
+      <div class="row">
+        <label for="f0">From</label><input id="f0" type="number" step="1">
+        <label for="f1">To</label><input id="f1" type="number" step="1">
+      </div>
+      <div class="row">
+        <button id="prev" class="button small" type="button">Earlier</button>
+        <button id="next" class="button small" type="button">Later</button>
+        <button id="apply" class="button small primary" type="button">Show</button>
+      </div>
+      <p id="frameNote" class="note"></p>
+      <h3>Events</h3>
+      <ul id="events" class="events"></ul>
+    </section>
+
+    <section>
+      <h2>Position axes</h2>
+      <div id="axes"></div>
+    </section>
+
+    <section>
+      <h2>Plot on position axes</h2>
+      <div class="checks" id="series"></div>
+    </section>
+
+    <section>
+      <h2>Reference lines</h2>
+      <textarea id="refs" rows="4" spellcheck="false" placeholder="y = 0 floor&#10;x = -2200 front face"></textarea>
+    </section>
+
+    <section>
+      <h2>More panels</h2>
+      <div class="checks" id="vars"></div>
+    </section>
+
+    <section>
+      <h2>Strips and layout</h2>
+      <div class="checks">
+        <label><input id="stripChecks" type="checkbox" checked> Checks</label>
+        <label><input id="stripState" type="checkbox" checked> Link state</label>
+        <label><input id="hideUnused" type="checkbox"> Hide steps that never run here</label>
+      </div>
+      <label class="slider" for="stepPx">Step width <span id="stepPxOut"></span></label>
+      <input id="stepPx" type="range" min="6" max="48" step="1" value="18">
+    </section>
+  </aside>
+
+  <section class="stage">
+    <div id="empty" class="empty">
+      <p>Open or drop a <code>collision_*.jsonl</code> recording.</p>
+    </div>
+    <div class="scroller"><div id="plot"></div></div>
+    <p id="status" class="note"></p>
+  </section>
+</main>
+
+<div id="drop" class="drop" hidden><p>Drop to open</p></div>
+
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

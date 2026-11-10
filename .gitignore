@@ -1,0 +1,5 @@
+.DS_Store
+Thumbs.db
+*.jsonl
+*.view.json
+node_modules/
