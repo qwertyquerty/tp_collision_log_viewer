@@ -2297,6 +2297,18 @@
       axes.forEach((a, k) => tipPt[k].push(tip[a]));
     }
     const update = {};
+    if (!P) {
+      const s = mapState.steps[mapState.idx];
+      const at = s ? s.pos : [0, 0, 0];
+      if (!p)
+        axes.forEach((a, k) => {
+          line[k].push(at[a], at[a]);
+          tipPt[k].push(at[a]);
+        });
+      const col = p ? colors().hi : 'rgba(0,0,0,0)';
+      update['line.color'] = [col, col];
+      update['marker.color'] = [col, col];
+    }
     keys.forEach((k, i) => {
       update[k] = [line[i], tipPt[i]];
     });
@@ -2565,20 +2577,20 @@
       {
         type: 'scatter3d',
         mode: 'lines',
-        x: [],
-        y: [],
-        z: [],
-        line: { color: C.hi, width: 6 },
+        x: [X(s.pos), X(s.pos)],
+        y: [Y(s.pos), Y(s.pos)],
+        z: [Z(s.pos), Z(s.pos)],
+        line: { color: 'rgba(0,0,0,0)', width: 6 },
         hoverinfo: 'skip',
         showlegend: false,
       },
       {
         type: 'scatter3d',
         mode: 'markers',
-        x: [],
-        y: [],
-        z: [],
-        marker: { size: 5, color: C.hi, symbol: 'diamond' },
+        x: [X(s.pos)],
+        y: [Y(s.pos)],
+        z: [Z(s.pos)],
+        marker: { size: 5, color: 'rgba(0,0,0,0)', symbol: 'diamond' },
         hoverinfo: 'skip',
         showlegend: false,
       },
