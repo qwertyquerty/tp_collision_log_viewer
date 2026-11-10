@@ -3,12 +3,24 @@
   const CIR = ['low', 'mid', 'top'];
   const AXES = ['x', 'y', 'z'];
   const PROCS = window.PROC_NAMES || [];
+  const HORSE_PROCS = [
+    'horse wait',
+    'horse move',
+    'horse stop',
+    'horse turn',
+    'horse jump',
+    'horse land',
+    'horse large damage',
+    'horse tool demo',
+    'horse none',
+  ];
   const MAX_FRAMES = 400;
   const DIVIDER_FRAMES = 80;
   const $ = (id) => document.getElementById(id);
 
   const SERIES = [
     { id: 'feet', label: 'Feet (Link position)', color: 'feet', on: true },
+    { id: 'epona', label: 'Epona position and circles (while riding)', color: 'epona', on: true },
     { id: 'c0', label: 'Low wall circle', color: 'low', on: true },
     { id: 'c1', label: 'Mid wall circle', color: 'mid', on: true },
     { id: 'c2', label: 'Top wall circle', color: 'top', on: true },
@@ -128,21 +140,85 @@
       get: (r) => ({ start: r.fr.nearby ? r.fr.nearby[0].count : null }),
     },
     {
+      id: 'windx',
+      label: 'Wind push x',
+      get: (r) => {
+        const e = ev(r, 'posmove_post');
+        return e && e.wind ? { move: fin(e.wind[0]) } : {};
+      },
+    },
+    {
+      id: 'windz',
+      label: 'Wind push z',
+      get: (r) => {
+        const e = ev(r, 'posmove_post');
+        return e && e.wind ? { move: fin(e.wind[2]) } : {};
+      },
+    },
+    {
+      id: 'gco',
+      label: 'Ground check offset',
+      get: (r) => ({ start: val(ev(r, 'crr_pre'), 'gnd_chk_offset') }),
+    },
+    {
+      id: 'rch',
+      label: 'Ceiling check height (roof_crr_h)',
+      get: (r) => ({ start: val(ev(r, 'crr_pre'), 'roof_crr_h') }),
+    },
+    {
+      id: 'pgh',
+      label: 'Ground height from the previous frame',
+      get: (r) => ({ start: val(ev(r, 'crr_pre'), 'prev_ground_h') }),
+    },
+    {
+      id: 'hpitch',
+      label: 'Epona pitch (field_0x1714)',
+      get: (r) => ({ start: val(ev(r, 'frame'), 'pitch') }),
+    },
+    {
+      id: 'hmax',
+      label: 'Epona max forward speed',
+      get: (r) => ({ start: val(ev(r, 'frame'), 'normal_max_speedF') }),
+    },
+    {
       id: 'wat',
       label: 'Water height',
       get: (r) => ({ clamp: val(ev(r, 'crr_post'), 'water_h') }),
     },
   ];
 
-  const STATE_ROWS = [
-    { label: 'jump flag', get: (r) => r.jump },
-    { label: 'line ends raised', get: (r) => r.raised },
+  const COMMON_STATE_ROWS = [
     { label: 'on ground', get: (r) => flag(ev(r, 'crr_post'), 'ground_hit') },
     { label: 'wall hit', get: (r) => flag(ev(r, 'crr_post'), 'wall_hit') },
     { label: 'ceiling hit', get: (r) => flag(ev(r, 'crr_post'), 'roof_hit') },
     { label: 'line check hit', get: (r) => flag(ev(r, 'crr_post'), 'line_hit') },
     { label: 'in water', get: (r) => flag(ev(r, 'crr_post'), 'water_in') },
+    { label: 'collision skipped', get: (r) => (r.fr.crr_skip ? 1 : 0) },
   ];
+
+  function modeBits(e, bit) {
+    if (!e || typeof e.mode !== 'string') return null;
+    return parseInt(e.mode, 16) & bit ? 1 : 0;
+  }
+
+  const LINK_STATE_ROWS = [
+    { label: 'jump flag', get: (r) => r.jump },
+    { label: 'line ends raised', get: (r) => r.raised },
+    ...COMMON_STATE_ROWS,
+    { label: 'magnet boots on', get: (r) => flag(ev(r, 'posmove_post'), 'magne_boots') },
+    { label: 'riding Epona', get: (r) => flag(ev(r, 'frame'), 'horse_ride') },
+    { label: 'thin ceiling rule off', get: (r) => flag(ev(r, 'ground_pre'), 'thin_ceiling_off') },
+  ];
+
+  const HORSE_STATE_ROWS = [
+    ...COMMON_STATE_ROWS,
+    { label: 'front line wall hit (flag 0x4)', get: (r) => modeBits(ev(r, 'frame_end'), 0x4) },
+    { label: 'collision y kept (flag 0x4000)', get: (r) => modeBits(ev(r, 'frame_end'), 0x4000) },
+  ];
+
+  function stateRows() {
+    return ui.actor === 'horse' ? HORSE_STATE_ROWS : LINK_STATE_ROWS;
+  }
 
   let log = null;
   let current = null;
@@ -155,6 +231,7 @@
       z: { on: false, scale: 'linear', off: 0, thr: 0.001 },
     },
     tab: 'steps',
+    actor: 'link',
   };
 
   function num(v) {
@@ -201,7 +278,9 @@
     };
   }
 
-  function procName(p) {
+  function procName(p, horse) {
+    if (horse || ui.actor === 'horse')
+      return HORSE_PROCS[p] !== undefined ? HORSE_PROCS[p] : 'horse proc ' + p;
     return PROCS[p] !== undefined ? PROCS[p] : 'proc ' + p;
   }
 
@@ -237,6 +316,7 @@
       'band4',
       'band5',
       'c-feet',
+      'c-epona',
       'c-low',
       'c-mid',
       'c-top',
@@ -276,14 +356,51 @@
       const fr = frames.get(e.f);
       (fr[e.ev] = fr[e.ev] || []).push(e);
     }
-    const nums = [...frames.keys()]
-      .sort((a, b) => a - b)
-      .filter((f) => frames.get(f).frame && frames.get(f).crr_pre);
-    const first = nums.length ? frames.get(nums[0]).frame[0] : null;
-    const perCircle = nums.some((f) => frames.get(f).line_cir);
+    const fillSkipped = (map) =>
+      map.forEach((fr) => {
+        if (!fr.frame || fr.crr_pre || !fr.crr_skip) return;
+        const f0 = fr.frame[0];
+        const pm = fr.posmove_post && fr.posmove_post[0];
+        fr.crr_pre = [
+          {
+            f: f0.f,
+            ev: 'crr_pre',
+            synthetic: true,
+            proc: f0.proc,
+            mode: f0.mode,
+            fly: f0.fly,
+            pos: (pm || f0).pos,
+            old: f0.old || f0.pos,
+            speed: (pm || f0).speed || [0, 0, 0],
+            line_raise: false,
+            circles: [],
+          },
+        ];
+      });
+    const usable = (map) =>
+      [...map.keys()].sort((a, b) => a - b).filter((f) => map.get(f).frame && map.get(f).crr_pre);
+    const horseFrames = new Map();
+    frames.forEach((fr, f) => {
+      const hf = {};
+      Object.keys(fr).forEach((k) => {
+        if (k.startsWith('horse_')) hf[k.slice(6)] = fr[k];
+      });
+      if (Object.keys(hf).length) horseFrames.set(f, hf);
+    });
+    fillSkipped(frames);
+    fillSkipped(horseFrames);
+    const actors = {
+      link: { frames, nums: usable(frames) },
+      horse: { frames: horseFrames, nums: usable(horseFrames) },
+    };
+    const nums = actors.link.nums.length ? actors.link.nums : actors.horse.nums;
+    const firstMap = actors.link.nums.length ? frames : horseFrames;
+    const first = nums.length ? firstMap.get(nums[0]).frame[0] : null;
+    const perCircle = nums.some((f) => firstMap.get(f).line_cir);
     return {
-      frames,
+      frames: firstMap,
       nums,
+      actors,
       bad,
       stage: first ? first.stage : '',
       room: first ? first.room : '',
@@ -393,8 +510,22 @@
     const rows = [];
     for (const f of log.nums) {
       if (f < f0 || f > f1) continue;
-      const fr = log.frames.get(f);
-      const nxt = log.frames.get(f + 1);
+      const row = makeRow(f, log.frames.get(f), log.frames.get(f + 1));
+      if (ui.actor === 'link') {
+        const hfr = log.actors.horse.frames.get(f);
+        const riding = row.fr.frame && row.fr.frame[0].horse_ride !== false;
+        if (riding && hfr && hfr.frame && hfr.crr_pre) {
+          row.horseRow = makeRow(f, hfr, log.actors.horse.frames.get(f + 1));
+          row.horseRow.isHorse = true;
+        }
+      }
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function makeRow(f, fr, nxt) {
+    {
       let lines = loggedLines(fr);
       if (!lines) {
         lines = reconLines(fr, nxt);
@@ -407,12 +538,46 @@
       const fly = typeof crr.fly === 'boolean' ? crr.fly : (mode & FLY_MASK) !== 0;
       const raised =
         typeof crr.line_raise === 'boolean' ? crr.line_raise : crr.speed[1] < 0 && !fly;
-      rows.push({ f, fr, lines, proc, jump: mode & 2 ? 1 : 0, raised: raised ? 1 : 0 });
+      return { f, fr, lines, proc, jump: mode & 2 ? 1 : 0, raised: raised ? 1 : 0 };
     }
-    return rows;
   }
 
   function buildColumns(rows, hideUnused) {
+    const horseRows = rows.map((r) => r.horseRow).filter(Boolean);
+    if (ui.actor !== 'link' || !horseRows.length) return buildActorColumns(rows, hideUnused);
+    ui.actor = 'horse';
+    let hcols;
+    try {
+      hcols = buildActorColumns(horseRows, hideUnused);
+    } finally {
+      ui.actor = 'link';
+    }
+    const lcols = buildActorColumns(rows, hideUnused);
+    const ecols = hcols.map((c) => ({
+      key: 'h:' + c.key,
+      base: c.key,
+      label: 'Epona ' + c.label,
+      check: c.check,
+      horse: true,
+    }));
+    rows.forEach((r) => {
+      const h = r.horseRow;
+      ecols.forEach((c) => {
+        if (!h || !h.st) {
+          r.st['h:' + c.base] = 'skipped';
+          return;
+        }
+        r.pts['h:' + c.base] = h.pts[c.base];
+        r.st['h:' + c.base] = h.st[c.base] || 'skipped';
+        r.labels['h:' + c.base] =
+          'Epona ' + ((h.labels && h.labels[c.base]) || hcols.find((x) => x.key === c.base).label);
+        if (h.detail && h.detail[c.base]) r.detail['h:' + c.base] = h.detail[c.base];
+      });
+    });
+    return ecols.concat(lcols);
+  }
+
+  function buildActorColumns(rows, hideUnused) {
     const kinds = new Map();
     rows.forEach((r) =>
       (r.lines || []).forEach((ln) => {
@@ -423,8 +588,13 @@
     );
     const cols = [
       { key: 'start', label: 'start', check: true },
+      { key: 'action', label: 'action code', check: true },
       { key: 'move', label: 'movement', check: true },
-      { key: 'body', label: 'wolf/swim check', check: true },
+      {
+        key: 'body',
+        label: ui.actor === 'horse' ? 'horse body check' : 'wolf/swim check',
+        check: true,
+      },
     ];
     if (rows.some((r) => r.fr.movebg))
       cols.push({ key: 'movebg', label: 'moving ground', check: true });
@@ -490,6 +660,31 @@
     };
     let cur = ev(r, 'frame').pos;
     set('start', cur, 'ran');
+    if (r.fr.crr_skip)
+      detail.start = 'CrrPos was skipped this frame (the collision skip flag was set)';
+    const pp = ev(r, 'posmove_pre');
+    const procs = (r.fr.proc || []).map(
+      (e) =>
+        'action change: ' +
+        procName(e.from) +
+        ' to ' +
+        procName(e.to) +
+        (e.pos ? ` at ${e.pos.map((v) => (+v).toFixed(3)).join(', ')}` : ''),
+    );
+    const aux = (r.fr.aux_line || []).map(auxLineText);
+    if (pp && !same(cur, pp.pos)) {
+      detail.action = [
+        `moved ${flatDistance(cur, pp.pos).toPrecision(6)} flat, ${(pp.pos[1] - cur[1]).toPrecision(6)} in y`,
+        'before the speed move, by the action code or an action change',
+        ...procs,
+        ...aux,
+      ].join('<br>');
+      cur = pp.pos;
+      set('action', cur, 'hit');
+    } else {
+      if (procs.length || aux.length) detail.action = [...procs, ...aux].join('<br>');
+      set('action', cur, pp ? 'ran' : 'skipped');
+    }
     const pm = ev(r, 'posmove_post');
     const moved = pm && !same(cur, pm.pos);
     if (pm) cur = pm.pos;
@@ -534,6 +729,11 @@
       cur = l1p.pos;
       set('line2', cur, 'hit');
     }
+    const lskip = ev(r, 'line1_skipped');
+    if (lskip) {
+      const why = lineSkipReason(r, lskip);
+      for (let k = 0; k < 3; k++) detail['line' + k] = why;
+    }
     const ld = ev(r, 'line_down');
     if (ld) {
       cur = ld.pos_after;
@@ -572,9 +772,20 @@
       cur = rf.pos;
     } else set('roof', cur, 'skipped');
     const gp = ev(r, 'ground_post');
+    const gn = ev(r, 'ground_none');
     if (gp) {
       set('ground', gp.pos, same(cur, gp.pos) ? 'ran' : 'hit');
       cur = gp.pos;
+    } else if (gn) {
+      const p = [cur[0], gn.pos_y, cur[2]];
+      const limit = fin(gn.roof_limit);
+      const clamped = limit !== null && limit < gn.pos_y;
+      if (clamped) p[1] = limit;
+      set('ground', p, clamped ? 'hit' : 'ran');
+      detail.ground =
+        'ground check off (ground-none flag)' +
+        (clamped ? `<br>y limited to the ceiling limit ${limit}` : '');
+      cur = p;
     } else set('ground', cur, 'skipped');
     const gr = ev(r, 'groundroof_post');
     if (gr) {
@@ -587,8 +798,15 @@
       if (cp) cur = cp.pos;
     }
     const fe = ev(r, 'frame_end');
-    if (fe) set('end', fe.pos, same(cur, fe.pos) ? 'ran' : 'hit');
-    else set('end', cur, 'skipped');
+    if (fe) {
+      const changed = !same(cur, fe.pos);
+      set('end', fe.pos, changed ? 'hit' : 'ran');
+      if (changed) {
+        const why = endReason(r, cur, fe.pos);
+        labels.end = why.label;
+        detail.end = why.detail;
+      }
+    } else set('end', cur, 'skipped');
     r.pts = pts;
     r.st = st;
     r.has = has;
@@ -600,8 +818,140 @@
     return Math.hypot(b[0] - a[0], b[2] - a[2]);
   }
 
+  function near(a, b) {
+    return Math.abs(a - b) < 1e-3;
+  }
+
+  function lineSkipReason(r, e) {
+    if (e.line_check_none)
+      return 'line check skipped: turned off for this action (line-check-none flag)';
+    const radius = fin(e.wall_all_low_h_r);
+    if (radius === null || Math.abs(radius) < 3.8e-6)
+      return 'line check skipped: the lowest circle radius is 0';
+    const crr = ev(r, 'crr_pre');
+    const off = crr ? fin(crr.gnd_chk_offset) : null;
+    const drop = fin(e.old_pos_dist_y);
+    const lowH = fin(e.wall_all_low_h);
+    const parts = [
+      'line check skipped: none of its run conditions held',
+      `horizontal move squared ${fmtNum(e.old_pos_dist2xz)} is not above the lowest circle radius squared ${fmtNum(radius * radius)}`,
+    ];
+    if (off !== null && drop !== null) {
+      parts.push(`drop ${fmtNum(drop)} is not above the ground check offset ${fmtNum(off)}`);
+      if (lowH !== null)
+        parts.push(
+          `drop ${fmtNum(drop)} is not above offset minus lowest circle height ${fmtNum(off - lowH)}`,
+        );
+    }
+    parts.push('no forced line check (line-check flag off)');
+    return parts.join('<br>');
+  }
+
+  function fmtNum(v) {
+    const n = fin(v);
+    return n === null ? String(v) : String(+n.toPrecision(6));
+  }
+
+  function endTag(step) {
+    const tags = [
+      ['magnet boots', 'end: magnet boots undo'],
+      ['underwater swim', 'end: swim y undo'],
+      ['tool demo', 'end: animation position'],
+      ['hookshot fly', 'end: collision undone'],
+      ['door open', 'end: y to frame start'],
+      ['mode 0x4000', 'end: x/z undone'],
+      ['fly attention', 'end: y to frame start'],
+    ];
+    const hit = tags.find(([k]) => step.startsWith(k));
+    return hit ? hit[1] : 'end: moved after collision';
+  }
+
+  function auxLineText(e) {
+    const what = e.hit
+      ? e.poly
+        ? `hit ${kindOf(e.poly.normal)} bg ${e.poly.bg} poly ${e.poly.poly}`
+        : 'hit'
+      : 'no hit';
+    return `action line check: ${what}`;
+  }
+
+  function endReason(r, before, end) {
+    const after = ev(r, 'crr_after');
+    if (after && Array.isArray(after.steps)) {
+      const moved = `moved ${flatDistance(before, end).toPrecision(6)} flat, ${(end[1] - before[1]).toPrecision(6)} in y after collision`;
+      if (after.steps.length)
+        return {
+          label: endTag(after.steps[after.steps.length - 1]),
+          detail: [moved, ...after.steps].join('<br>'),
+        };
+      return {
+        label: 'end: moved after collision',
+        detail:
+          moved +
+          '<br>no restore branch applied, so the change comes from later code (ice slip, auto ground hit or the action)',
+      };
+    }
+    const pre = ev(r, 'crr_pre');
+    const post = ev(r, 'crr_post');
+    const start = ev(r, 'frame');
+    const moved = `moved ${flatDistance(before, end).toPrecision(6)} flat, ${(end[1] - before[1]).toPrecision(6)} in y after collision`;
+    if (pre && same(end, pre.pos))
+      return {
+        label: 'end: collision undone',
+        detail:
+          moved +
+          '<br>frame end equals the position from before CrrPos: the collision result was thrown away' +
+          '<br>Link does this for hookshot fly, magnet boots fly, rope, vine and riding modes, and with magnet boots on',
+      };
+    if (
+      pre &&
+      post &&
+      near(end[0], pre.pos[0]) &&
+      near(end[2], pre.pos[2]) &&
+      near(end[1], post.pos[1])
+    )
+      return {
+        label: 'end: x/z undone',
+        detail:
+          moved +
+          '<br>x and z equal the position from before CrrPos, y kept from collision (action mode 0x4000)',
+      };
+    if (
+      pre &&
+      post &&
+      near(end[1], pre.pos[1]) &&
+      near(end[0], post.pos[0]) &&
+      near(end[2], post.pos[2])
+    )
+      return {
+        label: 'end: y undone',
+        detail:
+          moved +
+          '<br>y equals the height from before CrrPos, x and z kept from collision' +
+          (ui.actor === 'horse'
+            ? ''
+            : '<br>Link does this while the underwater swim animation plays with no ground or ceiling hit'),
+      };
+    if (
+      (ui.actor === 'horse' || r.isHorse) &&
+      start &&
+      post &&
+      near(end[1], start.pos[1]) &&
+      near(end[0], post.pos[0]) &&
+      near(end[2], post.pos[2])
+    )
+      return {
+        label: 'end: y from frame start',
+        detail:
+          moved +
+          '<br>Epona: state flag 0x4000 off, so y goes back to the frame start and vertical speed to 0',
+      };
+    return { label: 'end: moved after collision', detail: moved };
+  }
+
   function bodyLineName(e) {
     if (e.kind === 'swim') return e.pass + ' line';
+    if (e.kind === 'horse') return `${e.pass} ${e.i === 0 ? 'front' : 'back'} line`;
     return `${e.pass} ${e.i === 0 ? 'back' : 'front'} ${e.height}`;
   }
 
@@ -633,13 +983,20 @@
     if (post && post.skipped) parts.push('skipped by its mode or action check');
     parts.push(...lines);
     if (moved && !post) parts.push('no line details in this recording');
+    (r.fr.body_push || []).forEach((e) => {
+      if (e.normal) parts.push(`push normal (${e.normal.map((v) => (+v).toFixed(4)).join(', ')})`);
+    });
     return {
       from,
       pos,
       moved,
       ran,
       kind,
-      label: kind ? kind + ' check' : 'wolf/swim check',
+      label: kind
+        ? kind + ' body check'
+        : ui.actor === 'horse'
+          ? 'horse body check'
+          : 'wolf/swim check',
       detail: parts.join('<br>'),
     };
   }
@@ -687,7 +1044,11 @@
           label: `${CIR[e.circle]}: ${kindOf(e.normal)} ${e.poly}`,
           detail: wallCirDetail(e),
         });
-      } else if (pre && !same(pre.pos, e.pos)) {
+      } else if (
+        pre &&
+        !same(pre.pos, e.pos) &&
+        !(r.fr.wall_cir || []).some((c) => c.mesh === 'dzb' && c.bg === e.bg)
+      ) {
         const moved = flatDistance(pre.pos, e.pos).toPrecision(6);
         steps.push({
           pos: e.pos,
@@ -715,10 +1076,24 @@
   }
 
   function polysOf(r) {
+    const own = polysFromFrame(r, '');
+    if (ui.actor !== 'link' || !r.fr.horse_crr_pre) return own;
+    const hf = {};
+    Object.keys(r.fr).forEach((k) => {
+      if (k.startsWith('horse_')) hf[k.slice(6)] = r.fr[k];
+    });
+    const seen = new Set(own.map((o) => polyKey(o.p)));
+    return own.concat(polysFromFrame({ fr: hf }, 'Epona ').filter((o) => !seen.has(polyKey(o.p))));
+  }
+
+  function polysFromFrame(r, tag) {
     const out = [];
     const add = (p, why) => {
-      if (p && typeof p === 'object' && p.normal && typeof p.d === 'number') out.push({ p, why });
+      if (p && typeof p === 'object' && p.normal && typeof p.d === 'number')
+        out.push({ p, why: tag + why });
     };
+    (r.fr.body_line || []).forEach((e) => e.line_hit && add(e.poly, 'body check line hit'));
+    (r.fr.aux_line || []).forEach((e) => e.hit && add(e.poly, 'action line check hit'));
     const g = ev(r, 'ground_post');
     if (g) add(g.found, 'ground found');
     const rf = ev(r, 'roof');
@@ -945,7 +1320,7 @@
     });
     vars.forEach((v) => panels.push({ type: 'var', v, h: 140 }));
     if ($('stripChecks').checked) panels.push({ type: 'checks', h: 46 });
-    if ($('stripState').checked) panels.push({ type: 'state', h: 16 * STATE_ROWS.length + 8 });
+    if ($('stripState').checked) panels.push({ type: 'state', h: 16 * stateRows().length + 8 });
     if (!panels.length) {
       Plotly.purge(plot);
       $('status').textContent = 'Turn on at least one panel.';
@@ -1136,16 +1511,39 @@
           color: [C.low, C.mid, C.top][k],
           name: CIR[k] + ' circle',
         });
+      if (cols.some((c) => c.horse)) {
+        series.push({
+          id: 'epona',
+          base: 'feet',
+          horse: true,
+          h: () => 0,
+          color: C.epona,
+          name: 'Epona',
+        });
+        for (let k = 0; k < 3; k++)
+          series.push({
+            id: 'epona',
+            base: 'c' + k,
+            horse: true,
+            h: (r) =>
+              a === 'y' && r.lines && r.lines[k] ? r.lines[k].h : a === 'y' ? circleH(r, k) : 0,
+            color: C.epona,
+            dash: ['dot', 'dash', 'longdash'][k],
+            name: 'Epona ' + CIR[k] + ' circle',
+          });
+      }
       series.forEach((sr) => {
         if (!show[sr.id]) return;
-        if (a !== 'y' && sr.id !== 'feet') return;
+        if (sr.horse && !show[sr.base] && sr.base !== 'feet') return;
+        if (a !== 'y' && sr.id !== 'feet' && sr.base !== 'feet') return;
         const xs = [];
         const ys = [];
         const cd = [];
         rows.forEach((r, j) => {
           cols.forEach((c, ci) => {
-            const pt = r.pts[c.key];
-            const raw = pt ? pt[ai] + sr.h(r) : null;
+            const pt = !!c.horse === !!sr.horse ? r.pts[c.key] : null;
+            const rr = sr.horse ? r.horseRow : r;
+            const raw = pt && rr ? pt[ai] + sr.h(rr) : null;
             xs.push(X(j, ci));
             ys.push(tf(raw));
             cd.push([r.f, c.label, raw === null ? '' : raw.toPrecision(9)]);
@@ -1161,7 +1559,7 @@
           x: xs,
           y: ys,
           yaxis: p.ax,
-          line: { color: sr.color, width: 2, shape: 'hv' },
+          line: { color: sr.color, width: 2, shape: 'hv', dash: sr.dash || 'solid' },
           name: sr.name,
           legendgroup: sr.name,
           showlegend: legendOnce(sr.name),
@@ -1516,6 +1914,7 @@
 
     function statePanel(p, ax) {
       p.title = 'Link state';
+      const STATE_ROWS = stateRows();
       const z = STATE_ROWS.map(() => []);
       const xs = [];
       const text = STATE_ROWS.map(() => []);
@@ -1641,29 +2040,36 @@
     const movedOnly = $('mapMoved').checked;
     const steps = [];
     let carry = null;
+    const carryBy = {};
     if (latest)
       latest.rows.forEach((r) => {
-        let last = null;
+        const lastBy = {};
         latest.cols.forEach((c) => {
           const st = r.st[c.key];
           const pos = r.pts[c.key];
           if (!st || st === 'skipped' || !pos) return;
-          const from = last ? last.pos : carry || pos;
+          const who = c.horse ? 'h' : 'l';
+          const last = lastBy[who];
+          const from = last ? last.pos : carryBy[who] || pos;
           const s = {
-            r,
+            r: c.horse ? r.horseRow : r,
+            row: r,
             c,
-            key: c.key,
+            key: c.horse ? c.base : c.key,
+            horse: !!c.horse,
             st,
             pos,
             from,
             moved: !same(from, pos),
             label: (r.labels && r.labels[c.key]) || c.label,
           };
-          last = s;
-          if (movedOnly && !s.moved && c.key !== 'start') return;
+          lastBy[who] = s;
+          if (movedOnly && !s.moved && s.key !== 'start') return;
           steps.push(s);
         });
-        if (last) carry = last.pos;
+        Object.keys(lastBy).forEach((who) => {
+          carryBy[who] = lastBy[who].pos;
+        });
       });
     mapState.steps = steps;
     let idx = 0;
@@ -1680,6 +2086,20 @@
     const seek = $('mapSeek');
     seek.max = Math.max(0, steps.length - 1);
     seek.value = idx;
+  }
+
+  function horseOverlay(r) {
+    if (ui.actor !== 'link' || !r.fr.horse_crr_pre) return null;
+    const end = (r.fr.horse_frame_end || r.fr.horse_crr_post || r.fr.horse_crr_pre)[0];
+    const circles = r.fr.horse_crr_pre[0].circles || [];
+    if (!end || !end.pos) return null;
+    return {
+      pos: end.pos,
+      circles,
+      text: `Epona at frame end<br>${end.pos.map((v) => v.toFixed(3)).join(', ')}<br>wall circles: ${circles
+        .map((c) => `h ${c.h} r ${c.r}`)
+        .join(', ')}`,
+    };
   }
 
   function linkCircles(r) {
@@ -1715,6 +2135,16 @@
         });
         return { name: name + ' normals', col, a, tips, text };
       });
+  }
+
+  function axis3() {
+    return $('mapMirror').checked ? [0, 2, 1] : [2, 0, 1];
+  }
+
+  function map3dHeight() {
+    const el = $('map');
+    const top = el.getBoundingClientRect().top + window.scrollY;
+    return Math.max(480, Math.round(window.innerHeight - top - 12));
   }
 
   function bodyTop(r) {
@@ -1803,6 +2233,16 @@
           });
       }
     }
+    if (s.key === 'action')
+      (r.fr.aux_line || []).forEach((e) =>
+        segs.push({
+          a: e.start,
+          b: e.end,
+          cross: e.hit ? e.cross : null,
+          on: !!e.hit,
+          text: auxLineText(e),
+        }),
+      );
     if (kind === 'lc2')
       (r.fr.line_cir || [])
         .filter((e) => e.pass === 'line2' && e.start && e.end)
@@ -1860,7 +2300,7 @@
     const d = [0, 1, 2].map((i) => s.pos[i] - s.from[i]);
     const detail = r.detail && r.detail[s.key] ? r.detail[s.key].split('<br>') : [];
     const rows = [
-      ['Frame', r.f + ', ' + procName(r.proc)],
+      ['Frame', r.f + ', ' + procName(r.proc, r.isHorse)],
       ['Step', `${n} of ${inFrame.length}: ${s.label}`],
       ['Result', s.st],
       ['Position', s.pos.map((v) => v.toFixed(3)).join(', ')],
@@ -1913,7 +2353,9 @@
     $('mapStep').textContent = `frame ${s.r.f}, ${s.label} (${mapState.idx + 1}/${steps.length})`;
     const C = colors();
     mapInfo(s, C);
-    if ($('mapProj').value === 'ortho' || $('mapProj').value === 'persp') renderMap3d(s, C);
+    const is3d = $('mapProj').value === 'ortho' || $('mapProj').value === 'persp';
+    $('mapView').classList.toggle('is3d', is3d);
+    if (is3d) renderMap3d(s, C);
     else renderMap2d(s, C);
   }
 
@@ -2156,6 +2598,71 @@
         arrowcolor: stepColor(kind, C),
         text: '',
       });
+    const horse = horseOverlay(r);
+    if (horse) {
+      const hx = [];
+      const hy = [];
+      horse.circles.forEach((c) => {
+        if (P.v === 2) {
+          for (let t = 0; t <= 48; t++) {
+            const a = (t / 48) * Math.PI * 2;
+            const q = [
+              horse.pos[0] + c.r * Math.cos(a),
+              horse.pos[1] + c.h,
+              horse.pos[2] + c.r * Math.sin(a),
+            ];
+            hx.push(U(q));
+            hy.push(V(q));
+          }
+        } else {
+          const l = [horse.pos[0], horse.pos[1] + c.h, horse.pos[2]];
+          const rr = [horse.pos[0], horse.pos[1] + c.h, horse.pos[2]];
+          l[P.u] -= c.r;
+          rr[P.u] += c.r;
+          hx.push(U(l), U(rr));
+          hy.push(V(l), V(rr));
+        }
+        hx.push(null);
+        hy.push(null);
+      });
+      traces.push(
+        {
+          type: 'scatter',
+          mode: 'lines',
+          x: hx,
+          y: hy,
+          line: { color: C.hi, width: 1.5, dash: 'dash' },
+          hoverinfo: 'skip',
+          name: 'Epona circles',
+          legendgroup: 'epona',
+        },
+        {
+          type: 'scatter',
+          mode: 'markers',
+          x: [U(horse.pos)],
+          y: [V(horse.pos)],
+          marker: { size: 8, color: C.hi, symbol: 'diamond' },
+          text: [horse.text],
+          hoverinfo: 'text',
+          name: 'Epona',
+          legendgroup: 'epona',
+        },
+      );
+    }
+    const feet = ev(r, 'feet');
+    if (feet && Array.isArray(feet.feet))
+      traces.push({
+        type: 'scatter',
+        mode: 'markers',
+        x: feet.feet.map(U),
+        y: feet.feet.map(V),
+        marker: { size: 7, color: C.floor, symbol: 'square-open', line: { width: 2 } },
+        text: feet.feet.map(
+          (p, i) => `hoof ${i + 1} ground point<br>${p.map((v) => v.toFixed(3)).join(', ')}`,
+        ),
+        hoverinfo: 'text',
+        name: 'hoof ground points',
+      });
     const centers = circleCenters(r, s.pos);
     if (centers.length)
       traces.push({
@@ -2180,7 +2687,7 @@
       marker: { size: 8, color: C.fg, line: { color: C.bg, width: 1 } },
       text: [`frame ${r.f}, ${s.label}<br>${s.pos.map((v) => v.toFixed(3)).join(', ')}`],
       hoverinfo: 'text',
-      name: 'Link',
+      name: ui.actor === 'horse' || r.isHorse ? 'Epona' : 'Link',
     });
     const follow = $('mapFollow').checked;
     const span = Math.max(1, parseFloat($('mapSpan').value) || 200);
@@ -2203,7 +2710,11 @@
       hovermode: 'closest',
       hoverlabel: { bgcolor: C.raise, bordercolor: C.act, font: { size: 11, color: C.fg } },
       xaxis: axis(P.un),
-      yaxis: Object.assign(axis(P.vn), { scaleanchor: 'x', scaleratio: 1 }),
+      yaxis: Object.assign(axis(P.vn), {
+        scaleanchor: 'x',
+        scaleratio: 1,
+        autorange: P.v === 2 && !$('mapMirror').checked ? 'reversed' : true,
+      }),
       shapes,
       annotations: ann,
       uirevision: follow ? 'follow' + mapState.idx : 'map-' + $('mapProj').value,
@@ -2223,7 +2734,9 @@
       const cv = V(s.pos) + tall / 2;
       layout.xaxis.range = [U(s.pos) - view / 2, U(s.pos) + view / 2];
       layout.yaxis.range = [cv - view / 2, cv + view / 2];
+      if (P.v === 2 && !$('mapMirror').checked) layout.yaxis.range.reverse();
     }
+    if (layout.yaxis.range) delete layout.yaxis.autorange;
     mapState.hoverTrace = traces.length;
     traces.push(
       {
@@ -2261,7 +2774,45 @@
       el.on('plotly_relayout', (e) => rememberZoom(e));
       el.on('plotly_hover', (e) => showHoveredNormal(e));
       el.on('plotly_unhover', () => showHoveredNormal(null));
+      el.addEventListener('dblclick', () => {
+        const p = mapState.pendingHover || mapState.hovered;
+        if (p && !PROJ[$('mapProj').value]) faceCamera(p);
+      });
     }
+  }
+
+  function faceCamera(p) {
+    const el = $('map');
+    const sc = el._fullLayout && el._fullLayout.scene;
+    const scene = sc && sc._scene;
+    if (!scene) return;
+    const ar = scene.glplot.getAspectratio();
+    const aspect = [ar.x, ar.y, ar.z];
+    const ranges = [sc.xaxis.range, sc.yaxis.range, sc.zaxis.range];
+    const m3 = axis3();
+    const toPlot = (v) => m3.map((i) => v[i]);
+    const c = toPlot([0, 1, 2].map((d) => (p.tri[0][d] + p.tri[1][d] + p.tri[2][d]) / 3));
+    const n = toPlot(p.normal);
+    const center = c.map(
+      (v, i) =>
+        (aspect[i] * (v - (ranges[i][0] + ranges[i][1]) / 2)) / (ranges[i][1] - ranges[i][0]),
+    );
+    const dir = n.map((v, i) => (v * (ranges[i][1] - ranges[i][0])) / aspect[i]);
+    const len = Math.hypot(...dir) || 1;
+    const cam = scene.getCamera();
+    const dist =
+      Math.hypot(cam.eye.x - cam.center.x, cam.eye.y - cam.center.y, cam.eye.z - cam.center.z) ||
+      1.5;
+    const eye = center.map((v, i) => v + (dir[i] / len) * dist);
+    const up = Math.abs(n[2]) > 0.9 ? { x: 0, y: 1, z: 0 } : { x: 0, y: 0, z: 1 };
+    Plotly.relayout(el, {
+      'scene.camera': {
+        center: { x: center[0], y: center[1], z: center[2] },
+        eye: { x: eye[0], y: eye[1], z: eye[2] },
+        up,
+        projection: { type: $('mapProj').value === 'persp' ? 'perspective' : 'orthographic' },
+      },
+    });
   }
 
   function showHoveredNormal(e) {
@@ -2306,7 +2857,7 @@
       return;
     mapState.hovered = p;
     const P = PROJ[$('mapProj').value];
-    const axes = P ? [P.u, P.v] : [0, 2, 1];
+    const axes = P ? [P.u, P.v] : axis3();
     const keys = P ? ['x', 'y'] : ['x', 'y', 'z'];
     const line = keys.map(() => []);
     const tipPt = keys.map(() => []);
@@ -2405,9 +2956,10 @@
     mapState.hovered = null;
     mapState.pendingHover = null;
     clearTimeout(mapState.hoverTimer);
-    const X = (p) => p[0];
-    const Y = (p) => p[2];
-    const Z = (p) => p[1];
+    const m3 = axis3();
+    const X = (p) => p[m3[0]];
+    const Y = (p) => p[m3[1]];
+    const Z = (p) => p[m3[2]];
     const mesh = (list, col, opacity, name) => {
       if (!list.length) return;
       const x = [];
@@ -2563,6 +3115,66 @@
           showlegend: false,
         });
     });
+    const horse3 = horseOverlay(r);
+    if (horse3) {
+      const hx = [];
+      const hy = [];
+      const hz = [];
+      horse3.circles.forEach((c) => {
+        for (let t = 0; t <= 48; t++) {
+          const a = (t / 48) * Math.PI * 2;
+          const q = [
+            horse3.pos[0] + c.r * Math.cos(a),
+            horse3.pos[1] + c.h,
+            horse3.pos[2] + c.r * Math.sin(a),
+          ];
+          hx.push(X(q));
+          hy.push(Y(q));
+          hz.push(Z(q));
+        }
+        hx.push(null);
+        hy.push(null);
+        hz.push(null);
+      });
+      traces.push(
+        {
+          type: 'scatter3d',
+          mode: 'lines',
+          x: hx,
+          y: hy,
+          z: hz,
+          line: { color: C.hi, width: 3, dash: 'dash' },
+          hoverinfo: 'skip',
+          name: 'Epona circles',
+          legendgroup: 'epona',
+        },
+        {
+          type: 'scatter3d',
+          mode: 'markers',
+          x: [X(horse3.pos)],
+          y: [Y(horse3.pos)],
+          z: [Z(horse3.pos)],
+          marker: { size: 5, color: C.hi, symbol: 'diamond' },
+          text: [horse3.text],
+          hoverinfo: 'text',
+          name: 'Epona',
+          legendgroup: 'epona',
+        },
+      );
+    }
+    const feet3 = ev(r, 'feet');
+    if (feet3 && Array.isArray(feet3.feet))
+      traces.push({
+        type: 'scatter3d',
+        mode: 'markers',
+        x: feet3.feet.map(X),
+        y: feet3.feet.map(Y),
+        z: feet3.feet.map(Z),
+        marker: { size: 4, color: C.floor, symbol: 'square-open' },
+        text: feet3.feet.map((p, i) => `hoof ${i + 1} ground point`),
+        hoverinfo: 'text',
+        name: 'hoof ground points',
+      });
     const centers = circleCenters(r, s.pos);
     if (centers.length)
       traces.push({
@@ -2585,7 +3197,7 @@
       marker: { size: 5, color: C.fg },
       text: [`frame ${r.f}, ${s.label}`],
       hoverinfo: 'text',
-      name: 'Link',
+      name: ui.actor === 'horse' || r.isHorse ? 'Epona' : 'Link',
     });
     const follow = $('mapFollow').checked;
     const span = Math.max(1, parseFloat($('mapSpan').value) || 200);
@@ -2638,7 +3250,7 @@
       el,
       traces,
       {
-        height: 640,
+        height: map3dHeight(),
         margin: { l: 0, r: 0, t: 0, b: 0 },
         paper_bgcolor: C.panel,
         font: { family: css('--font-mono') || 'monospace', color: C.fg, size: 11 },
@@ -2650,8 +3262,8 @@
           aspectratio: cam && cam.aspectratio ? cam.aspectratio : undefined,
           bgcolor: C.panel,
           camera,
-          xaxis: axis('x', X(s.pos)),
-          yaxis: axis('z', Y(s.pos)),
+          xaxis: axis('xyz'[m3[0]], X(s.pos)),
+          yaxis: axis('xyz'[m3[1]], Y(s.pos)),
           zaxis: axis('y (up)', Z(s.pos) + tall / 2),
           uirevision: 'map3d-' + $('mapProj').value,
         },
@@ -2733,7 +3345,7 @@
       renderMap();
       saveSettings();
     });
-    ['mapProj', 'mapFollow', 'mapSpan'].forEach((id) =>
+    ['mapProj', 'mapFollow', 'mapSpan', 'mapMirror'].forEach((id) =>
       $(id).addEventListener('change', () => {
         mapState.zoom = null;
         mapState.cam3d = null;
@@ -2787,11 +3399,13 @@
       stripState: $('stripState').checked,
       hideUnused: $('hideUnused').checked,
       tab: ui.tab,
+      actor: ui.actor,
       map: {
         proj: $('mapProj').value,
         span: $('mapSpan').value,
         follow: $('mapFollow').checked,
         normals: $('mapNormals').checked,
+        mirror: $('mapMirror').checked,
         moved: $('mapMoved').checked,
         speed: $('mapSpeed').value,
         step: mapStepRef(),
@@ -2849,11 +3463,17 @@
     }
     if (typeof s.refs === 'string') $('refs').value = s.refs;
     if (s.tab === 'steps' || s.tab === 'map') ui.tab = s.tab;
+    if (s.actor === 'link' || s.actor === 'horse') {
+      ui.actor = s.actor;
+      $('actor').value = s.actor;
+      if (log) applyActor();
+    }
     if (s.map && typeof s.map === 'object') {
       if (s.map.proj) $('mapProj').value = s.map.proj;
       if (s.map.span) $('mapSpan').value = s.map.span;
       if (typeof s.map.follow === 'boolean') $('mapFollow').checked = s.map.follow;
       if (typeof s.map.normals === 'boolean') $('mapNormals').checked = s.map.normals;
+      if (typeof s.map.mirror === 'boolean') $('mapMirror').checked = s.map.mirror;
       if (typeof s.map.moved === 'boolean') $('mapMoved').checked = s.map.moved;
       if (s.map.speed) $('mapSpeed').value = s.map.speed;
       if (s.map.step && typeof s.map.step.f === 'number') mapState.restore = s.map.step;
@@ -2957,7 +3577,30 @@
           out.push({ f, k: 'hit', t: 'collision moved y ' + (dy > 0 ? '+' : '') + dy.toFixed(2) });
       }
       const fe = fr.frame_end && fr.frame_end[0];
-      if (fe && cp && !same(fe.pos, cp.pos)) out.push({ f, k: '', t: 'moved after collision' });
+      const pre = fr.crr_pre && fr.crr_pre[0];
+      const fs = fr.frame && fr.frame[0];
+      const horseYReset =
+        ui.actor === 'horse' &&
+        fe &&
+        cp &&
+        fs &&
+        Math.abs(fe.pos[0] - cp.pos[0]) < 1e-3 &&
+        Math.abs(fe.pos[2] - cp.pos[2]) < 1e-3 &&
+        Math.abs(fe.pos[1] - fs.pos[1]) < 1e-3;
+      if (fe && cp && !same(fe.pos, cp.pos) && !horseYReset)
+        out.push({
+          f,
+          k: '',
+          t:
+            pre && same(fe.pos, pre.pos) ? 'collision result thrown away' : 'moved after collision',
+        });
+      if (fr.crr_skip) out.push({ f, k: '', t: 'collision skipped' });
+      (fr.aux_line || []).forEach((e) => {
+        if (e.hit) out.push({ f, k: '', t: auxLineText(e) });
+      });
+      const pp = fr.posmove_pre && fr.posmove_pre[0];
+      if (pp && fs && flatDistance(fs.pos, pp.pos) + Math.abs(pp.pos[1] - fs.pos[1]) > 1)
+        out.push({ f, k: '', t: 'action code moved ' + flatDistance(fs.pos, pp.pos).toFixed(1) });
       (fr.proc || []).forEach((e) =>
         out.push({ f, k: '', t: procName(e.from) + ' to ' + procName(e.to) }),
       );
@@ -3088,6 +3731,16 @@
     });
     $('export').addEventListener('click', exportView);
     buildMapControls();
+    $('actor').addEventListener('change', () => {
+      ui.actor = $('actor').value;
+      if (!log) return;
+      applyActor();
+      mapState.steps = [];
+      mapState.restore = null;
+      mapState.zoom = null;
+      renderEvents();
+      render();
+    });
   }
 
   function syncAxisInputs() {
@@ -3119,6 +3772,19 @@
   }
   const debounced = debounce(render, 150);
 
+  function applyActor() {
+    if (!log) return;
+    const hasHorse = log.actors.horse.nums.length > 0;
+    const hasLink = log.actors.link.nums.length > 0;
+    $('actor').querySelector('option[value="horse"]').disabled = !hasHorse;
+    $('actor').querySelector('option[value="link"]').disabled = !hasLink;
+    if (ui.actor === 'horse' && !hasHorse) ui.actor = 'link';
+    if (ui.actor === 'link' && !hasLink) ui.actor = 'horse';
+    $('actor').value = ui.actor;
+    log.frames = log.actors[ui.actor].frames;
+    log.nums = log.actors[ui.actor].nums;
+  }
+
   function useLog(text, name) {
     const parsed = parseLog(text);
     if (!parsed.nums.length) {
@@ -3126,6 +3792,7 @@
       return false;
     }
     log = parsed;
+    applyActor();
     current = { name, text };
     $('export').disabled = false;
     $('empty').hidden = true;
@@ -3139,6 +3806,9 @@
       log.nums[0] +
       '-' +
       log.nums[log.nums.length - 1] +
+      (log.actors.horse.nums.length
+        ? ', Epona on ' + log.actors.horse.nums.length + ' frames'
+        : '') +
       (log.bad ? ', ' + log.bad + ' bad lines' : '');
     const evs = renderEvents();
     return evs;

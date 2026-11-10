@@ -15,6 +15,7 @@
   --band4: #1e1e1e;
   --band5: #101010;
   --c-feet: #7fb6ff;
+  --c-epona: #ffb48a;
   --c-low: #8fe8a9;
   --c-mid: #ff9ad2;
   --c-top: #ffbd7a;
@@ -339,6 +340,21 @@ input[type="range"] { width: 100%; accent-color: var(--act); }
 .mapinfo dd { margin: 0; font-variant-numeric: tabular-nums; }
 
 .mapinfo h3 { margin-bottom: 6px; }
+
+.is3d .mapbody { display: block; position: relative; }
+
+.is3d .mapinfo {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 280px;
+  max-height: 60%;
+  overflow: auto;
+  z-index: 5;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: rgba(11, 11, 11, 0.85);
+}
 
 .mapinfo ul { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
 

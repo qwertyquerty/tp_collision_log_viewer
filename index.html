@@ -25,6 +25,13 @@
     <section>
       <h2>Frames</h2>
       <div class="row">
+        <label for="actor">Actor</label>
+        <select id="actor">
+          <option value="link">Link</option>
+          <option value="horse">Epona (while ridden)</option>
+        </select>
+      </div>
+      <div class="row">
         <label for="f0">From</label><input id="f0" type="number" step="1">
         <label for="f1">To</label><input id="f1" type="number" step="1">
       </div>
@@ -96,6 +103,7 @@
         <label class="check"><input id="mapFollow" type="checkbox" checked> Follow Link</label>
         <label class="check"><input id="mapMoved" type="checkbox"> Only steps that moved Link</label>
         <label class="check"><input id="mapNormals" type="checkbox"> Normals</label>
+        <label class="check" title="Old orientation: game z up in top down, game x and z swapped in 3D"><input id="mapMirror" type="checkbox"> Mirror</label>
         <label>Play speed
           <select id="mapSpeed">
             <option value="600">slow</option>
