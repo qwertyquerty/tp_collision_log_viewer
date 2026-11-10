@@ -1636,7 +1636,8 @@
 
   function buildMapSteps() {
     const prev = mapState.steps[mapState.idx];
-    const keep = prev ? { f: prev.r.f, key: prev.key } : null;
+    const keep = prev ? { f: prev.r.f, key: prev.key } : mapState.restore;
+    mapState.restore = null;
     const movedOnly = $('mapMoved').checked;
     const steps = [];
     let carry = null;
@@ -1695,6 +1696,25 @@
         text: `${CIR[i]} circle center, ${c.h} above feet, radius ${c.r}<br>${p.map((v) => v.toFixed(3)).join(', ')}`,
       };
     });
+  }
+
+  function normalTraces(polys, C) {
+    const len = Math.max(4, (parseFloat($('mapSpan').value) || 200) * 0.06);
+    return polyGroups(polys, C)
+      .filter(([, , list]) => list.length)
+      .map(([name, col, list]) => {
+        const a = [];
+        const tips = [];
+        const text = [];
+        list.forEach((p) => {
+          const c = [0, 1, 2].map((d) => (p.tri[0][d] + p.tri[1][d] + p.tri[2][d]) / 3);
+          const tip = c.map((v, d) => v + p.normal[d] * len);
+          a.push(c, tip, null);
+          tips.push(tip);
+          text.push(polyText(p));
+        });
+        return { name: name + ' normals', col, a, tips, text };
+      });
   }
 
   function bodyTop(r) {
@@ -1905,6 +1925,10 @@
     const traces = [];
     const shapes = [];
     const ann = [];
+    mapState.polyTraces = new Map();
+    mapState.hovered = null;
+    mapState.pendingHover = null;
+    clearTimeout(mapState.hoverTimer);
     polyGroups(
       polysOf(r).map((o) => o.p),
       C,
@@ -1935,7 +1959,37 @@
         line: { color: rgba(col, 0.8), width: 1 },
         name,
       });
+      mapState.polyTraces.set(traces.length - 1, { list, stride: 5 });
     });
+    if ($('mapNormals').checked)
+      normalTraces(
+        polysOf(r).map((o) => o.p),
+        C,
+      ).forEach((q) =>
+        traces.push(
+          {
+            type: 'scatter',
+            mode: 'lines',
+            x: q.a.map((p) => (p ? U(p) : null)),
+            y: q.a.map((p) => (p ? V(p) : null)),
+            line: { color: q.col, width: 1.2 },
+            hoverinfo: 'skip',
+            name: q.name,
+            legendgroup: q.name,
+          },
+          {
+            type: 'scatter',
+            mode: 'markers',
+            x: q.tips.map(U),
+            y: q.tips.map(V),
+            marker: { size: 5, color: q.col, symbol: 'diamond' },
+            text: q.text,
+            hoverinfo: 'text',
+            legendgroup: q.name,
+            showlegend: false,
+          },
+        ),
+      );
     const hl = stepPolys(s);
     if (hl.length) {
       const x = [];
@@ -1961,6 +2015,7 @@
         line: { color: C.fg, width: 3 },
         name: 'surfaces this step used',
       });
+      mapState.polyTraces.set(traces.length - 1, { list: hl, stride: 5 });
     }
     const rows = latest.rows;
     const ri = rows.indexOf(r);
@@ -2159,6 +2214,9 @@
       const cv = V(s.pos) + zoom.dv;
       layout.xaxis.range = [cu - zoom.w / 2, cu + zoom.w / 2];
       layout.yaxis.range = [cv - zoom.h / 2, cv + zoom.h / 2];
+    } else if (!follow && zoom && zoom.abs) {
+      layout.xaxis.range = zoom.abs[0].slice();
+      layout.yaxis.range = zoom.abs[1].slice();
     } else if (follow) {
       const tall = P.v === 1 ? bodyTop(r) : 0;
       const view = Math.max(span, tall + 100);
@@ -2166,6 +2224,27 @@
       layout.xaxis.range = [U(s.pos) - view / 2, U(s.pos) + view / 2];
       layout.yaxis.range = [cv - view / 2, cv + view / 2];
     }
+    mapState.hoverTrace = traces.length;
+    traces.push(
+      {
+        type: 'scatter',
+        mode: 'lines',
+        x: [],
+        y: [],
+        line: { color: C.hi, width: 3 },
+        hoverinfo: 'skip',
+        showlegend: false,
+      },
+      {
+        type: 'scatter',
+        mode: 'markers',
+        x: [],
+        y: [],
+        marker: { size: 10, color: C.hi, symbol: 'diamond' },
+        hoverinfo: 'skip',
+        showlegend: false,
+      },
+    );
     const el = $('map');
     Plotly.react(el, traces, layout, {
       responsive: true,
@@ -2180,7 +2259,58 @@
     if (!el.mapZoomHooked && el.on) {
       el.mapZoomHooked = true;
       el.on('plotly_relayout', (e) => rememberZoom(e));
+      el.on('plotly_hover', (e) => showHoveredNormal(e));
+      el.on('plotly_unhover', () => showHoveredNormal(null));
     }
+  }
+
+  function showHoveredNormal(e) {
+    const pt = e && e.points && e.points[0];
+    const ref = pt && mapState.polyTraces ? mapState.polyTraces.get(pt.curveNumber) : null;
+    const n = pt ? (Array.isArray(pt.pointNumber) ? pt.pointNumber[0] : pt.pointNumber) : null;
+    mapState.pendingHover =
+      ref && typeof n === 'number' ? ref.list[Math.floor(n / ref.stride)] || null : null;
+    clearTimeout(mapState.hoverTimer);
+    mapState.hoverTimer = setTimeout(applyHoveredNormal, mapState.pendingHover ? 30 : 150);
+  }
+
+  function applyHoveredNormal() {
+    const el = $('map');
+    const h = mapState.hoverTrace;
+    const p = mapState.pendingHover;
+    if (p === mapState.hovered) return;
+    if (h === undefined || !el.data || !el.data[h + 1] || !el._fullLayout || mapState.restyling)
+      return;
+    mapState.hovered = p;
+    const P = PROJ[$('mapProj').value];
+    const axes = P ? [P.u, P.v] : [0, 2, 1];
+    const keys = P ? ['x', 'y'] : ['x', 'y', 'z'];
+    const line = keys.map(() => []);
+    const tipPt = keys.map(() => []);
+    if (p) {
+      const c = [0, 1, 2].map((d) => (p.tri[0][d] + p.tri[1][d] + p.tri[2][d]) / 3);
+      const len = Math.max(10, (parseFloat($('mapSpan').value) || 200) * 0.15);
+      const tip = c.map((v, d) => v + p.normal[d] * len);
+      [p.tri[0], p.tri[1], p.tri[2], p.tri[0], null, c, tip].forEach((q) =>
+        axes.forEach((a, k) => line[k].push(q ? q[a] : null)),
+      );
+      axes.forEach((a, k) => tipPt[k].push(tip[a]));
+    }
+    const update = {};
+    keys.forEach((k, i) => {
+      update[k] = [line[i], tipPt[i]];
+    });
+    mapState.restyling = true;
+    Promise.resolve()
+      .then(() => Plotly.restyle(el, update, [h, h + 1]))
+      .catch(() => null)
+      .then(() => {
+        mapState.restyling = false;
+        if (mapState.pendingHover !== mapState.hovered) {
+          clearTimeout(mapState.hoverTimer);
+          mapState.hoverTimer = setTimeout(applyHoveredNormal, 30);
+        }
+      });
   }
 
   function rememberZoom(e) {
@@ -2192,6 +2322,7 @@
         camera: sc.camera ? JSON.parse(JSON.stringify(sc.camera)) : null,
         aspectratio: sc.aspectratio ? Object.assign({}, sc.aspectratio) : null,
       };
+      saveSoon();
       return;
     }
     const P = PROJ[proj];
@@ -2212,12 +2343,18 @@
       h: yr[1] - yr[0],
       du: (xr[0] + xr[1]) / 2 - s.pos[P.u],
       dv: (yr[0] + yr[1]) / 2 - s.pos[P.v],
+      abs: [xr.slice(), yr.slice()],
     };
+    saveSoon();
   }
 
   function renderMap3d(s, C) {
     const r = s.r;
     const traces = [];
+    mapState.polyTraces = new Map();
+    mapState.hovered = null;
+    mapState.pendingHover = null;
+    clearTimeout(mapState.hoverTimer);
     const X = (p) => p[0];
     const Y = (p) => p[2];
     const Z = (p) => p[1];
@@ -2259,6 +2396,7 @@
         hoverinfo: 'text',
         legendgroup: name,
       });
+      mapState.polyTraces.set(traces.length - 1, { list, stride: 3 });
       const ex = [];
       const ey = [];
       const ez = [];
@@ -2289,6 +2427,37 @@
       C,
     ).forEach(([name, col, list]) => mesh(list, col, 0.35, name));
     mesh(stepPolys(s), C.fg, 0.85, 'surfaces this step used');
+    if ($('mapNormals').checked)
+      normalTraces(
+        polysOf(r).map((o) => o.p),
+        C,
+      ).forEach((q) =>
+        traces.push(
+          {
+            type: 'scatter3d',
+            mode: 'lines',
+            x: q.a.map((p) => (p ? X(p) : null)),
+            y: q.a.map((p) => (p ? Y(p) : null)),
+            z: q.a.map((p) => (p ? Z(p) : null)),
+            line: { color: q.col, width: 3 },
+            hoverinfo: 'skip',
+            name: q.name,
+            legendgroup: q.name,
+          },
+          {
+            type: 'scatter3d',
+            mode: 'markers',
+            x: q.tips.map(X),
+            y: q.tips.map(Y),
+            z: q.tips.map(Z),
+            marker: { size: 3, color: q.col, symbol: 'diamond' },
+            text: q.text,
+            hoverinfo: 'text',
+            legendgroup: q.name,
+            showlegend: false,
+          },
+        ),
+      );
     const trail = mapState.steps.filter((t, i) => t.r === r && i <= mapState.idx).map((t) => t.pos);
     const first = ev(r, 'frame').pos;
     const path = [first, ...trail];
@@ -2391,6 +2560,29 @@
       cam && cam.camera ? cam.camera : {},
       { projection: { type: proj === 'persp' ? 'perspective' : 'orthographic' } },
     );
+    mapState.hoverTrace = traces.length;
+    traces.push(
+      {
+        type: 'scatter3d',
+        mode: 'lines',
+        x: [],
+        y: [],
+        z: [],
+        line: { color: C.hi, width: 6 },
+        hoverinfo: 'skip',
+        showlegend: false,
+      },
+      {
+        type: 'scatter3d',
+        mode: 'markers',
+        x: [],
+        y: [],
+        z: [],
+        marker: { size: 5, color: C.hi, symbol: 'diamond' },
+        hoverinfo: 'skip',
+        showlegend: false,
+      },
+    );
     const el = $('map');
     Plotly.react(
       el,
@@ -2419,10 +2611,21 @@
     hookMapZoom(el);
   }
 
+  function mapStepRef() {
+    const s = mapState.steps[mapState.idx];
+    return s ? { f: s.r.f, key: s.key } : mapState.restore || null;
+  }
+
+  function saveSoon() {
+    clearTimeout(mapState.saveTimer);
+    mapState.saveTimer = setTimeout(saveSettings, 300);
+  }
+
   function seekTo(i) {
     if (!mapState.steps.length) return;
     mapState.idx = Math.min(Math.max(0, i), mapState.steps.length - 1);
     renderMap();
+    saveSoon();
   }
 
   function seekFrame(dir) {
@@ -2476,6 +2679,10 @@
     $('mapPrevF').addEventListener('click', () => seekFrame(-1));
     $('mapNextF').addEventListener('click', () => seekFrame(1));
     $('mapPlay').addEventListener('click', togglePlay);
+    $('mapNormals').addEventListener('change', () => {
+      renderMap();
+      saveSettings();
+    });
     ['mapProj', 'mapFollow', 'mapSpan'].forEach((id) =>
       $(id).addEventListener('change', () => {
         mapState.zoom = null;
@@ -2534,8 +2741,12 @@
         proj: $('mapProj').value,
         span: $('mapSpan').value,
         follow: $('mapFollow').checked,
+        normals: $('mapNormals').checked,
         moved: $('mapMoved').checked,
         speed: $('mapSpeed').value,
+        step: mapStepRef(),
+        zoom: mapState.zoom,
+        cam3d: mapState.cam3d,
       },
     };
     SERIES.forEach((x) => {
@@ -2592,8 +2803,12 @@
       if (s.map.proj) $('mapProj').value = s.map.proj;
       if (s.map.span) $('mapSpan').value = s.map.span;
       if (typeof s.map.follow === 'boolean') $('mapFollow').checked = s.map.follow;
+      if (typeof s.map.normals === 'boolean') $('mapNormals').checked = s.map.normals;
       if (typeof s.map.moved === 'boolean') $('mapMoved').checked = s.map.moved;
       if (s.map.speed) $('mapSpeed').value = s.map.speed;
+      if (s.map.step && typeof s.map.step.f === 'number') mapState.restore = s.map.step;
+      if (s.map.zoom && typeof s.map.zoom === 'object') mapState.zoom = s.map.zoom;
+      if (s.map.cam3d && typeof s.map.cam3d === 'object') mapState.cam3d = s.map.cam3d;
     }
     showTab();
     if (s.f0 !== undefined) $('f0').value = s.f0;
@@ -2883,6 +3098,9 @@
     const evs = useLog(text, name);
     if (!evs) return;
     if (fresh) {
+      mapState.restore = null;
+      mapState.zoom = null;
+      mapState.steps = [];
       const firstHit = evs.find((e) => e.k === 'hit');
       const c = firstHit ? firstHit.f : log.nums[0] + 2;
       $('f0').value = Math.max(log.nums[0], c - 2);
