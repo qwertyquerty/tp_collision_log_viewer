@@ -1142,7 +1142,7 @@
                 null,
               );
             }
-            if (!show.push || kind !== 'wall' || r.fr.wall_cir) return;
+            if (!show.push || kind !== 'wall') return;
             const crr = ev(r, 'crr_pre');
             const radius = crr && crr.circles[0] ? crr.circles[0].r : 35;
             const zone = pushZone(poly, radius);
