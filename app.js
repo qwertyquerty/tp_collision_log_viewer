@@ -2274,6 +2274,29 @@
     mapState.hoverTimer = setTimeout(applyHoveredNormal, mapState.pendingHover ? 30 : 150);
   }
 
+  function syncViewIntoLayout(el) {
+    const fl = el._fullLayout;
+    const L = el.layout;
+    if (!fl || !L) return;
+    const sc = fl.scene && fl.scene._scene;
+    if (sc && L.scene) {
+      try {
+        L.scene.camera = sc.getCamera();
+        const ar = sc.glplot.getAspectratio();
+        L.scene.aspectratio = { x: ar.x, y: ar.y, z: ar.z };
+        L.scene.aspectmode = 'manual';
+      } catch (err) {
+        return;
+      }
+    }
+    ['xaxis', 'yaxis'].forEach((k) => {
+      if (fl[k] && L[k] && Array.isArray(fl[k].range)) {
+        L[k].range = fl[k].range.slice();
+        L[k].autorange = false;
+      }
+    });
+  }
+
   function applyHoveredNormal() {
     const el = $('map');
     const h = mapState.hoverTrace;
@@ -2312,6 +2335,7 @@
     keys.forEach((k, i) => {
       update[k] = [line[i], tipPt[i]];
     });
+    syncViewIntoLayout(el);
     mapState.restyling = true;
     Promise.resolve()
       .then(() => Plotly.restyle(el, update, [h, h + 1]))
@@ -2328,12 +2352,26 @@
   function rememberZoom(e) {
     const proj = $('mapProj').value;
     if (e && Object.keys(e).some((k) => k.startsWith('scene'))) {
+      const prev = mapState.cam3d && mapState.cam3d.proj === proj ? mapState.cam3d : null;
       const sc = ($('map').layout && $('map').layout.scene) || {};
-      mapState.cam3d = {
-        proj,
-        camera: sc.camera ? JSON.parse(JSON.stringify(sc.camera)) : null,
-        aspectratio: sc.aspectratio ? Object.assign({}, sc.aspectratio) : null,
-      };
+      const base = JSON.parse(
+        JSON.stringify({
+          camera: (prev && prev.camera) || sc.camera || null,
+          aspectratio: (prev && prev.aspectratio) || null,
+        }),
+      );
+      Object.keys(e).forEach((k) => {
+        if (!k.startsWith('scene.')) return;
+        const path = k.slice(6).split('.');
+        if (path[0] !== 'camera' && path[0] !== 'aspectratio') return;
+        let o = base;
+        path.slice(0, -1).forEach((part) => {
+          if (!o[part] || typeof o[part] !== 'object') o[part] = {};
+          o = o[part];
+        });
+        o[path[path.length - 1]] = JSON.parse(JSON.stringify(e[k]));
+      });
+      mapState.cam3d = { proj, camera: base.camera, aspectratio: base.aspectratio };
       saveSoon();
       return;
     }
