@@ -3,7 +3,8 @@
   const CIR = ['low', 'mid', 'top'];
   const AXES = ['x', 'y', 'z'];
   const PROCS = window.PROC_NAMES || [];
-  const MAX_FRAMES = 80;
+  const MAX_FRAMES = 400;
+  const DIVIDER_FRAMES = 80;
   const $ = (id) => document.getElementById(id);
 
   const SERIES = [
@@ -912,7 +913,7 @@
           line: { width: 0 },
           layer: 'below',
         });
-        for (let ci = 0; ci < nc - 1; ci++) {
+        for (let ci = 0; rows.length <= DIVIDER_FRAMES && ci < nc - 1; ci++) {
           const xb = X(j, ci) + 0.5;
           shapes.push({
             type: 'line',
