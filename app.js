@@ -18,7 +18,40 @@
     { id: 'refs', label: 'Reference lines', color: 'ref', on: true },
   ];
 
+  const MOVE_PARTS = [
+    { id: 'mv', label: 'Movement step total', part: 'total' },
+    { id: 'an', label: 'Animation movement', part: 'anim' },
+    { id: 'ot', label: 'Other movement (not speed, animation or actor push)', part: 'other' },
+  ];
+
+  function movementParts(r) {
+    const pre = ev(r, 'posmove_pre');
+    const post = ev(r, 'posmove_post');
+    if (!pre || !post) return null;
+    const total = [0, 1, 2].map((i) => post.pos[i] - pre.pos[i]);
+    const anim = post.anim_move || null;
+    const cc = pre.cc_move || [0, 0, 0];
+    const other = [0, 1, 2].map((i) => total[i] - post.speed[i] - (anim ? anim[i] : 0) - cc[i]);
+    return { total, anim, other };
+  }
+
+  function movementGetter(part, axis) {
+    return (r) => {
+      const m = movementParts(r);
+      const v = m && m[part];
+      if (!v) return {};
+      if (axis === 'h') return { move: Math.hypot(v[0], v[2]) };
+      return { move: v[axis] };
+    };
+  }
+
   const VARS = [
+    ...MOVE_PARTS.flatMap((m) => [
+      { id: m.id + 'x', label: m.label + ' x', get: movementGetter(m.part, 0) },
+      { id: m.id + 'y', label: m.label + ' y', get: movementGetter(m.part, 1) },
+      { id: m.id + 'z', label: m.label + ' z', get: movementGetter(m.part, 2) },
+      { id: m.id + 'h', label: m.label + ', horizontal', get: movementGetter(m.part, 'h') },
+    ]),
     { id: 'spx', label: 'Speed x', get: speedAt(0) },
     { id: 'spy', label: 'Speed y', get: speedAt(1) },
     { id: 'spz', label: 'Speed z', get: speedAt(2) },
