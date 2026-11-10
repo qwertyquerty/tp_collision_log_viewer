@@ -343,14 +343,16 @@ input[type="range"] { width: 100%; accent-color: var(--act); }
 
 .is3d .mapbody { display: block; position: relative; }
 
-.is3d .mapinfo {
+.is3d .mapside {
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 280px;
-  max-height: 60%;
-  overflow: auto;
+  width: 300px;
+  max-height: calc(100% - 16px);
   z-index: 5;
+}
+
+.is3d .mapinfo {
   padding: 10px 12px;
   border: 1px solid var(--line);
   background: rgba(11, 11, 11, 0.85);
@@ -375,3 +377,17 @@ input[type="range"] { width: 100%; accent-color: var(--act); }
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; }
 }
+
+
+.mapside { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 12px; min-width: 0; max-height: calc(100vh - 16px); overflow: auto; }
+
+.wallinfo { border: 1px solid var(--line); background: var(--raise); padding: 10px 12px; }
+
+.wallinfo .wp-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-weight: 600; margin-bottom: 8px; }
+
+.wallinfo .wp-head button { background: none; border: 1px solid var(--line); color: var(--fg); font: inherit; cursor: pointer; padding: 0 6px; }
+
+.wallinfo dl { margin: 0 0 6px; }
+
+.wallinfo dt { text-transform: none; letter-spacing: 0; font-size: 0.72rem; }
+

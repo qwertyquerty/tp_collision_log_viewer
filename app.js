@@ -2319,6 +2319,7 @@
         ? '<h3>Detail</h3><ul>' + detail.map((t) => `<li>${esc(t)}</li>`).join('') + '</ul>'
         : '');
     $('mapInfo').innerHTML = html;
+    if (mapState.wallPoly && !$('wallPop').hidden) showWallInfo(mapState.wallPoly);
   }
 
   function polyGroups(polys, C) {
@@ -2331,6 +2332,220 @@
       ['walls', C.wall, groups.wall],
       ['ceilings', C.roof, groups.ceiling],
     ];
+  }
+
+  const F32 = Math.fround;
+  const f32View = new DataView(new ArrayBuffer(8));
+  function f32Key(v) {
+    f32View.setFloat32(0, v);
+    const b = f32View.getInt32(0);
+    return b < 0 ? -(b & 0x7fffffff) : b;
+  }
+
+  function f32FromKey(k) {
+    f32View.setInt32(0, k < 0 ? (-k | 0x80000000) : k);
+    return f32View.getFloat32(0);
+  }
+
+  function f32Step(v) {
+    const f = F32(v);
+    return f32FromKey(f32Key(f) + 1) - f;
+  }
+
+  function wallRest(P, inv, fl, room) {
+    let x = P + 20;
+    for (let i = 0; i < 60; i++) {
+      x -= 10;
+      const dist = P - x;
+      if (dist < 0 || F32(dist * dist) > 1225) continue;
+      const d2 = F32(dist * dist);
+      if (room) {
+        let m = F32(F32(inv * F32(Math.sqrt(d2))) - 1);
+        if (m < 0) m = 0;
+        x += m * fl;
+      } else {
+        let m = F32(fastSqrt(d2) - 1);
+        if (m < 0) m = 0;
+        x += F32(m * inv) * fl;
+      }
+    }
+    return x;
+  }
+
+  function sliceSeg(tri, y) {
+    const h = tri.map((v) => F32(F32(v[1]) - y));
+    if ((h[0] > 0 && h[1] > 0 && h[2] > 0) || (h[0] < 0 && h[1] < 0 && h[2] < 0)) return null;
+    let a;
+    let b;
+    let c;
+    if ((h[0] > 0 && h[1] <= 0 && h[2] <= 0) || (h[0] < 0 && h[1] >= 0 && h[2] >= 0)) [a, b, c] = [0, 1, 2];
+    else if ((h[1] > 0 && h[0] <= 0 && h[2] <= 0) || (h[1] < 0 && h[0] >= 0 && h[2] >= 0)) [a, b, c] = [1, 0, 2];
+    else [a, b, c] = [2, 0, 1];
+    const d1 = F32(h[a] - h[b]);
+    const d2 = F32(h[a] - h[c]);
+    if (Math.abs(d1) < 3.8146973e-6 || Math.abs(d2) < 3.8146973e-6) return null;
+    const t1 = F32(-h[b] / d1);
+    const t2 = F32(-h[c] / d2);
+    const P = tri.map((v) => v.map(F32));
+    const lerp = (o, t, i, k) => F32(P[o][k] + F32(t * F32(P[i][k] - P[o][k])));
+    return [lerp(b, t1, a, 0), lerp(b, t1, a, 2), lerp(c, t2, a, 0), lerp(c, t2, a, 2)];
+  }
+
+  function pushGrabs(px, pz, seg, ox, oz) {
+    const x0 = F32(seg[0] + ox);
+    const z0 = F32(seg[1] + oz);
+    const x1 = F32(seg[2] + ox);
+    const z1 = F32(seg[3] + oz);
+    const dx = F32(x1 - x0);
+    const dz = F32(z1 - z0);
+    const len = F32(F32(dx * dx) + F32(dz * dz));
+    if (Math.abs(len) < 3.8146973e-6) return false;
+    const t = F32(F32(F32(dx * F32(px - x0)) + F32(dz * F32(pz - z0))) / len);
+    const qx = F32(x0 + F32(dx * t));
+    const qz = F32(z0 + F32(dz * t));
+    const ex = F32(qx - px);
+    const ez = F32(qz - pz);
+    const d2 = F32(F32(ex * ex) + F32(ez * ez));
+    return !(d2 > 1225) && !(F32(F32(ex * ox) + F32(ez * oz)) < 0);
+  }
+
+  function lineCatches(px, y, pz, n, p, room) {
+    if (room) {
+      const o = p.tri[0].map(F32);
+      const vx = F32(px - o[0]);
+      const vy = F32(y - o[1]);
+      const vz = F32(pz - o[2]);
+      return F32(F32(n[2] * vz) + F32(F32(n[0] * vx) + F32(n[1] * vy))) <= 0;
+    }
+    const dot = F32(F32(n[2] * pz) + F32(F32(n[0] * px) + F32(n[1] * y)));
+    return F32(F32(p.d) + dot) <= 0;
+  }
+
+  function seamScan(p, w, room) {
+    const y = F32((F32(p.tri[0][1]) + F32(p.tri[1][1]) + F32(p.tri[2][1])) / 3);
+    const seg = sliceSeg(p.tri, y);
+    if (!seg) return null;
+    const n = [w.nx, w.ny, w.nz];
+    const mx = (seg[0] + seg[2]) / 2;
+    const mz = (seg[1] + seg[3]) / 2;
+    const ux = w.nx / w.fl;
+    const uz = w.nz / w.fl;
+    const res = { count: {}, step: {}, dmin: Infinity, dmax: -Infinity, mx, mz, ux, uz };
+    [
+      ['x', ux, mx, (v) => [v, F32(mz)]],
+      ['z', uz, mz, (v) => [F32(mx), v]],
+    ].forEach(([ax, u, m, pt]) => {
+      res.step[ax] = f32Step(m);
+      if (Math.abs(u) < 1e-6) {
+        res.count[ax] = null;
+        return;
+      }
+      const pad = 0.002 / Math.abs(u);
+      const far = m + Math.sign(u) * (Math.max(w.seam, 0) / Math.abs(u) + pad);
+      const near = m - Math.sign(u) * pad;
+      const lo = f32Key(F32(Math.min(near, far)));
+      const hi = f32Key(F32(Math.max(near, far)));
+      if (hi - lo > 2000000) {
+        res.count[ax] = 'over 2000000';
+        return;
+      }
+      let c = 0;
+      for (let k = lo; k <= hi; k++) {
+        const [x, z] = pt(f32FromKey(k));
+        if (lineCatches(x, y, z, n, p, room) || pushGrabs(x, z, seg, w.ox, w.oz)) continue;
+        c++;
+        const dist = (x - mx) * ux + (z - mz) * uz;
+        res.dmin = Math.min(res.dmin, dist);
+        res.dmax = Math.max(res.dmax, dist);
+      }
+      res.count[ax] = c;
+    });
+    return res;
+  }
+
+  function wallSeam(p) {
+    const [nx, ny, nz] = p.normal.map(F32);
+    const out = { nx, ny, nz };
+    out.pitch = (Math.asin(Math.max(-1, Math.min(1, ny))) * 180) / Math.PI;
+    out.yaw = ((((Math.atan2(nx, nz) * 180) / Math.PI) % 360) + 360) % 360;
+    out.yawUnits = Math.round((Math.atan2(nx, nz) * 32768) / Math.PI) & 0xffff;
+    out.len2 = nx * nx + ny * ny + nz * nz;
+    out.q = F32(F32(nx * nx) + F32(nz * nz));
+    out.wall = ny < 0.5 && out.q !== 0;
+    if (!out.wall) return out;
+    out.fast = fastSqrt(out.q);
+    out.inv = F32(1 / out.fast);
+    const k = F32(out.inv * 35);
+    out.ox = F32(nx * k);
+    out.oz = F32(nz * k);
+    out.fl = Math.sqrt(nx * nx + nz * nz);
+    out.pusher = (out.ox * nx + out.oz * nz) / out.fl;
+    out.seam = out.pusher - 35;
+    out.restRoom = wallRest(out.pusher, out.inv, out.fl, true);
+    out.restObj = wallRest(out.pusher, out.inv, out.fl, false);
+    return out;
+  }
+
+  function showWallInfo(p) {
+    mapState.wallPoly = p;
+    const box = $('wallPop');
+    const w = wallSeam(p);
+    const f9 = (v) => (+v).toPrecision(9);
+    const vec = (a) => a.map(f9).join(', ');
+    const ys = p.tri.map((v) => v[1]);
+    const rows = [];
+    const row = (k, v) => rows.push(`<dt>${k}</dt><dd>${v}</dd>`);
+    p.tri.forEach((v, i) => row(`vertex ${i}`, vec(v)));
+    row('normal', vec([w.nx, w.ny, w.nz]));
+    row('|n|^2 - 1', (w.len2 - 1).toExponential(3));
+    row('pitch', `${w.pitch.toFixed(4)} deg${w.pitch > 0 ? ' (leans back)' : w.pitch < 0 ? ' (overhang)' : ''}`);
+    row('yaw', `${w.yaw.toFixed(4)} deg (${w.yawUnits} units)`);
+    row('height', `${f9(Math.min(...ys))} to ${f9(Math.max(...ys))}`);
+    row('nx^2 + nz^2', f9(w.q));
+    if (!w.wall) {
+      row('seam', w.ny >= 0.5 ? 'no, floor' : 'no, no flat normal');
+    } else {
+      row('JMAFastSqrt', f9(w.fast));
+      row('pusher', `${w.pusher.toFixed(7)} out`);
+      if (w.seam > 0) {
+        row('seam', `<b>yes</b>, ${w.seam.toFixed(7)} deep`);
+        const kinds =
+          p.actor === 732
+            ? [
+                ['room KCL', true, w.restRoom],
+                ['room DZB', false, w.restObj],
+              ]
+            : [['', false, w.restObj]];
+        kinds.forEach(([tag, room, rest]) => {
+          const sc = seamScan(p, w, room);
+          if (!sc) return;
+          const lbl = (t) => (tag ? `${t} (${tag})` : t);
+          const cnt = (ax) =>
+            sc.count[ax] === null ? `${ax}: parallel` : `${ax}: ${sc.count[ax]} (step ${sc.step[ax].toPrecision(3)})`;
+          row(lbl('landing spots'), `${cnt('x')}<br>${cnt('z')}`);
+          if (sc.dmax < sc.dmin) return;
+          const win = (from) => `${(from - sc.dmax).toFixed(4)} to ${(from - sc.dmin).toFixed(4)}`;
+          row(lbl('from rest'), win(rest));
+          const st = mapState.steps[mapState.idx];
+          if (st && st.pos)
+            row(lbl('from Link'), win((st.pos[0] - sc.mx) * sc.ux + (st.pos[2] - sc.mz) * sc.uz));
+        });
+      } else {
+        row('seam', `no, push reaches ${(-w.seam).toFixed(7)} behind the face`);
+      }
+      if (w.ny >= 0.014) row('usable', 'no, ground check lifts Link onto it');
+      if (w.ny < -0.8) row('ceiling', 'yes (normal y < -0.8)');
+    }
+    box.innerHTML =
+      `<div class="wp-head"><span>${kindOf(p.normal)}, ${polyId(p)}</span><button type="button" id="wallPopClose" aria-label="Close">x</button></div>` +
+      `<dl>${rows.join('')}</dl>`;
+    box.hidden = false;
+    $('wallPopClose').onclick = () => (box.hidden = true);
+  }
+
+  function polyOpacity() {
+    const v = parseFloat($('mapOpacity').value);
+    return isFinite(v) ? Math.max(0, Math.min(1, v / 100)) : 0.35;
   }
 
   function polyText(p) {
@@ -2397,7 +2612,7 @@
         text,
         hoverinfo: 'text',
         fill: 'toself',
-        fillcolor: rgba(col, 0.1),
+        fillcolor: rgba(col, polyOpacity() * (0.1 / 0.35)),
         line: { color: rgba(col, 0.8), width: 1 },
         name,
       });
@@ -2778,6 +2993,15 @@
         const p = mapState.pendingHover || mapState.hovered;
         if (p && !PROJ[$('mapProj').value]) faceCamera(p);
       });
+      document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape') $('wallPop').hidden = true;
+      });
+      el.addEventListener('contextmenu', (ev) => {
+        const p = mapState.pendingHover || mapState.hovered;
+        if (!p) return;
+        ev.preventDefault();
+        showWallInfo(p);
+      });
     }
   }
 
@@ -3027,7 +3251,7 @@
     polyGroups(
       polysOf(r).map((o) => o.p),
       C,
-    ).forEach(([name, col, list]) => mesh(list, col, 0.35, name));
+    ).forEach(([name, col, list]) => mesh(list, col, polyOpacity(), name));
     mesh(stepPolys(s), C.fg, 0.85, 'surfaces this step used');
     if ($('mapNormals').checked)
       normalTraces(
@@ -3345,6 +3569,15 @@
       renderMap();
       saveSettings();
     });
+    let opacityFrame = 0;
+    $('mapOpacity').addEventListener('input', () => {
+      $('mapOpacityOut').textContent = $('mapOpacity').value + '%';
+      cancelAnimationFrame(opacityFrame);
+      opacityFrame = requestAnimationFrame(() => {
+        renderMap();
+        saveSettings();
+      });
+    });
     ['mapProj', 'mapFollow', 'mapSpan', 'mapMirror'].forEach((id) =>
       $(id).addEventListener('change', () => {
         mapState.zoom = null;
@@ -3405,6 +3638,7 @@
         span: $('mapSpan').value,
         follow: $('mapFollow').checked,
         normals: $('mapNormals').checked,
+        opacity: $('mapOpacity').value,
         mirror: $('mapMirror').checked,
         moved: $('mapMoved').checked,
         speed: $('mapSpeed').value,
@@ -3473,6 +3707,10 @@
       if (s.map.span) $('mapSpan').value = s.map.span;
       if (typeof s.map.follow === 'boolean') $('mapFollow').checked = s.map.follow;
       if (typeof s.map.normals === 'boolean') $('mapNormals').checked = s.map.normals;
+      if (s.map.opacity !== undefined) {
+        $('mapOpacity').value = s.map.opacity;
+        $('mapOpacityOut').textContent = $('mapOpacity').value + '%';
+      }
       if (typeof s.map.mirror === 'boolean') $('mapMirror').checked = s.map.mirror;
       if (typeof s.map.moved === 'boolean') $('mapMoved').checked = s.map.moved;
       if (s.map.speed) $('mapSpeed').value = s.map.speed;

@@ -103,6 +103,7 @@
         <label class="check"><input id="mapFollow" type="checkbox" checked> Follow Link</label>
         <label class="check"><input id="mapMoved" type="checkbox"> Only steps that moved Link</label>
         <label class="check"><input id="mapNormals" type="checkbox"> Normals</label>
+        <label title="Polygon fill opacity">Opacity <input id="mapOpacity" type="range" min="0" max="100" step="5" value="35"> <span id="mapOpacityOut">35%</span></label>
         <label class="check" title="Old orientation: game z up in top down, game x and z swapped in 3D"><input id="mapMirror" type="checkbox"> Mirror</label>
         <label>Play speed
           <select id="mapSpeed">
@@ -123,7 +124,10 @@
       <p id="mapStep" class="note mapstep"></p>
       <div class="mapbody">
         <div id="map"></div>
-        <aside id="mapInfo" class="mapinfo"></aside>
+        <div class="mapside">
+          <aside id="wallPop" class="mapinfo wallinfo" aria-label="Wall info" hidden></aside>
+          <aside id="mapInfo" class="mapinfo"></aside>
+        </div>
       </div>
     </div>
     <p id="status" class="note"></p>
