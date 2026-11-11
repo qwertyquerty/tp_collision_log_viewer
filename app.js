@@ -334,7 +334,37 @@
     return c;
   }
 
+  const POLY_IDS = new Map();
+
+  function triIdKey(bg, tri) {
+    return bg + '|' + tri.map((t) => t.join(',')).join(';');
+  }
+
+  function indexPolyIds(o, bg) {
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o)) {
+      o.forEach((x) => indexPolyIds(x, bg));
+      return;
+    }
+    const b = typeof o.bg === 'number' ? o.bg : bg;
+    if (typeof o.poly === 'number' && typeof b === 'number' && Array.isArray(o.tri) && o.tri.length === 3)
+      POLY_IDS.set(triIdKey(b, o.tri), o.poly);
+    for (const k in o) {
+      const v = o[k];
+      if (v && typeof v === 'object') indexPolyIds(v, b);
+    }
+  }
+
+  function fillPolyId(p) {
+    if (p && p.poly === undefined && typeof p.bg === 'number' && Array.isArray(p.tri)) {
+      const id = POLY_IDS.get(triIdKey(p.bg, p.tri));
+      if (id !== undefined) p.poly = id;
+    }
+    return p;
+  }
+
   function parseLog(text) {
+    POLY_IDS.clear();
     const frames = new Map();
     let bad = 0;
     let seq = 0;
@@ -352,6 +382,7 @@
         continue;
       }
       e.__n = seq++;
+      indexPolyIds(e, undefined);
       if (!frames.has(e.f)) frames.set(e.f, {});
       const fr = frames.get(e.f);
       (fr[e.ev] = fr[e.ev] || []).push(e);
@@ -1070,7 +1101,7 @@
     return (
       'bg ' +
       p.bg +
-      (p.poly !== undefined ? ' poly ' + p.poly : '') +
+      (p.poly !== undefined ? ' poly ' + p.poly : ' poly ?') +
       (p.actor !== undefined ? ', actor ' + p.actor : '')
     );
   }
@@ -1090,7 +1121,7 @@
     const out = [];
     const add = (p, why) => {
       if (p && typeof p === 'object' && p.normal && typeof p.d === 'number')
-        out.push({ p, why: tag + why });
+        out.push({ p: fillPolyId(p), why: tag + why });
     };
     (r.fr.body_line || []).forEach((e) => e.line_hit && add(e.poly, 'body check line hit'));
     (r.fr.aux_line || []).forEach((e) => e.hit && add(e.poly, 'action line check hit'));
