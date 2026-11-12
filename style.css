@@ -325,6 +325,22 @@ input[type="range"] { width: 100%; accent-color: var(--act); }
 
 .timeline input[type="range"] { flex: 1; min-width: 80px; }
 
+.seekwrap { position: relative; flex: 1; min-width: 80px; display: flex; align-items: center; height: 26px; }
+
+.seekwrap canvas { position: absolute; left: 0; top: 50%; width: 100%; height: 14px; transform: translateY(-50%); border-radius: 3px; pointer-events: none; }
+
+.seekwrap input[type="range"] { position: relative; z-index: 1; width: 100%; margin: 0; height: 26px; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; }
+
+.seekwrap input[type="range"]::-webkit-slider-runnable-track { height: 14px; background: transparent; border: 1px solid var(--line); border-radius: 3px; }
+
+.seekwrap input[type="range"]::-moz-range-track { height: 14px; background: transparent; border: 1px solid var(--line); border-radius: 3px; }
+
+.seekwrap input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 6px; height: 24px; margin-top: -6px; background: var(--fg); border: 1px solid var(--bg); border-radius: 2px; }
+
+.seekwrap input[type="range"]::-moz-range-thumb { width: 6px; height: 24px; background: var(--fg); border: 1px solid var(--bg); border-radius: 2px; }
+
+.mapproc { font: 600 1.2rem var(--font-mono); white-space: nowrap; min-width: 16ch; padding-left: 6px; }
+
 .mapstep { margin: 6px 0 10px; color: var(--fg); }
 
 .mapbody { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }

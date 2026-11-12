@@ -284,6 +284,80 @@
     return PROCS[p] !== undefined ? PROCS[p] : 'proc ' + p;
   }
 
+  function stepProc(s) {
+    const r = s.r;
+    if (s.key !== 'start' && r.fr && r.fr.proc && r.fr.proc.length)
+      return r.fr.proc[r.fr.proc.length - 1].to;
+    return r.proc;
+  }
+
+  function procColor(p, horse) {
+    const hue = ((Number(p) || 0) * 137.508 + (horse ? 40 : 0)) % 360;
+    return 'hsl(' + hue.toFixed(1) + ', 70%, 62%)';
+  }
+
+  const SEEK_THUMB = 6;
+
+  function drawSeekStrip() {
+    const cv = $('mapSeekStrip');
+    if (!cv) return;
+    const w = cv.clientWidth;
+    const h = cv.clientHeight;
+    const steps = mapState.steps;
+    const sig = w + 'x' + h + ':' + steps.length + ':' + (steps[0] ? steps[0].r.f : '') + ':' + (steps.length ? steps[steps.length - 1].r.f : '');
+    if (!w || !h || cv.dataset.sig === sig) return;
+    cv.dataset.sig = sig;
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+    const g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    if (!steps.length) return;
+    const n = steps.length;
+    const travel = w - SEEK_THUMB;
+    const x = (i) => SEEK_THUMB / 2 + (n > 1 ? (i / (n - 1)) * travel : travel / 2);
+    let i0 = 0;
+    for (let i = 1; i <= n; i++) {
+      const p0 = stepProc(steps[i0]);
+      if (i < n && stepProc(steps[i]) === p0 && steps[i].horse === steps[i0].horse) continue;
+      const a = i0 === 0 ? 0 : (x(i0 - 1) + x(i0)) / 2;
+      const b = i === n ? w : (x(i - 1) + x(i)) / 2;
+      g.fillStyle = procColor(p0, steps[i0].horse || steps[i0].r.isHorse);
+      g.fillRect(a, 0, Math.max(1, b - a), h);
+      if (i0 > 0) {
+        g.fillStyle = css('--bg');
+        g.fillRect(a - 0.5, 0, 1, h);
+      }
+      i0 = i;
+    }
+  }
+
+  function updateProcLabel(s) {
+    const el = $('mapProc');
+    if (!el) return;
+    if (!s) {
+      el.textContent = '';
+      return;
+    }
+    const horse = s.horse || s.r.isHorse;
+    const p = stepProc(s);
+    el.textContent = procName(p, horse);
+    el.style.color = procColor(p, horse);
+    el.title = (horse ? 'Epona proc ' : 'Link proc ') + p;
+  }
+
+  function seekHover(e) {
+    const seek = $('mapSeek');
+    const steps = mapState.steps;
+    if (!steps.length) return;
+    const rect = seek.getBoundingClientRect();
+    const t = (e.clientX - rect.left - SEEK_THUMB / 2) / Math.max(1, rect.width - SEEK_THUMB);
+    const i = Math.min(steps.length - 1, Math.max(0, Math.round(t * (steps.length - 1))));
+    const s = steps[i];
+    seek.title = 'frame ' + s.r.f + ', ' + procName(stepProc(s), s.horse || s.r.isHorse) + ', ' + s.label;
+  }
+
   function same(a, b) {
     return (
       a &&
@@ -2147,6 +2221,7 @@
     const seek = $('mapSeek');
     seek.max = Math.max(0, steps.length - 1);
     seek.value = idx;
+    drawSeekStrip();
   }
 
   function horseOverlay(r) {
@@ -2238,7 +2313,7 @@
       if (push && push.cir)
         add({ normal: push.cir.normal, tri: push.cir.tri, bg: push.cir.bg, poly: push.cir.poly });
       const wp = ev(r, 'wall_post');
-      if (wp)
+      if (wp && !(push && push.cir))
         wp.circles.forEach((c) => {
           if (c.hit && (!push || push.bg === undefined || c.hit.bg === push.bg)) add(c.hit);
         });
@@ -2381,6 +2456,52 @@
         : '');
     $('mapInfo').innerHTML = html;
     if (mapState.wallPoly && !$('wallPop').hidden) showWallInfo(mapState.wallPoly);
+  }
+
+  function sliceCircle() {
+    const v = $('mapSlice') ? $('mapSlice').value : '';
+    return v === '' ? -1 : parseInt(v, 10);
+  }
+
+  function sliceHeight(r, ci) {
+    const wc = (r.fr && r.fr.wall_cir) || [];
+    const hit = wc.find((e) => e.circle === ci && Number.isFinite(e.slice_y));
+    if (hit) return { y: hit.slice_y, how: 'logged' };
+    const c = linkCircles(r)[ci];
+    const crr = ev(r, 'crr_pre');
+    const wp = ev(r, 'wall_pre') || crr;
+    if (!c || !wp || !wp.pos) return null;
+    const h = c.h_direct_on ? c.h_direct : wp.pos[1] + c.h - (crr && crr.speed ? crr.speed[1] : 0);
+    return { y: h, how: 'computed' };
+  }
+
+  function sliceTri(tri, y) {
+    const d = tri.map((p) => p[1] - y);
+    if ((d[0] > 0 && d[1] > 0 && d[2] > 0) || (d[0] < 0 && d[1] < 0 && d[2] < 0)) return null;
+    const pts = [];
+    for (let i = 0; i < 3; i++) {
+      const a = tri[i];
+      const b = tri[(i + 1) % 3];
+      const da = d[i];
+      const db = d[(i + 1) % 3];
+      if (da === 0) pts.push(a);
+      if ((da < 0 && db > 0) || (da > 0 && db < 0)) {
+        const t = da / (da - db);
+        pts.push([a[0] + (b[0] - a[0]) * t, y, a[2] + (b[2] - a[2]) * t]);
+      }
+    }
+    if (pts.length < 2) return null;
+    let best = [pts[0], pts[1]];
+    let bd = -1;
+    for (let i = 0; i < pts.length; i++)
+      for (let j = i + 1; j < pts.length; j++) {
+        const dd = (pts[i][0] - pts[j][0]) ** 2 + (pts[i][2] - pts[j][2]) ** 2;
+        if (dd > bd) {
+          bd = dd;
+          best = [pts[i], pts[j]];
+        }
+      }
+    return bd > 0 ? best : null;
   }
 
   function polyGroups(polys, C) {
@@ -2620,15 +2741,18 @@
   function renderMap() {
     const el = $('map');
     const steps = mapState.steps;
+    drawSeekStrip();
     if (!steps.length) {
       Plotly.purge(el);
       $('mapInfo').textContent = 'No steps in this frame range.';
       $('mapStep').textContent = '';
+      updateProcLabel(null);
       return;
     }
     mapState.idx = Math.min(Math.max(0, mapState.idx), steps.length - 1);
     const s = steps[mapState.idx];
     $('mapSeek').value = mapState.idx;
+    updateProcLabel(s);
     $('mapStep').textContent = `frame ${s.r.f}, ${s.label} (${mapState.idx + 1}/${steps.length})`;
     const C = colors();
     mapInfo(s, C);
@@ -2650,11 +2774,49 @@
     mapState.hovered = null;
     mapState.pendingHover = null;
     clearTimeout(mapState.hoverTimer);
+    const sci = P.v === 2 ? sliceCircle() : -1;
+    const slice = sci >= 0 ? sliceHeight(r, sci) : null;
+    const sliceTrace = (list, col, name, width) => {
+      const x = [];
+      const y = [];
+      const text = [];
+      const kept = [];
+      list.forEach((p) => {
+        const seg = sliceTri(p.tri, slice.y);
+        if (!seg) return;
+        kept.push(p);
+        const t = polyText(p) + `<br>cut at y ${slice.y.toFixed(3)}`;
+        seg.forEach((q) => {
+          x.push(U(q));
+          y.push(V(q));
+          text.push(t);
+        });
+        x.push(null);
+        y.push(null);
+        text.push(null);
+      });
+      if (!kept.length) return;
+      traces.push({
+        type: 'scatter',
+        mode: 'lines',
+        x,
+        y,
+        text,
+        hoverinfo: 'text',
+        line: { color: col, width },
+        name,
+      });
+      mapState.polyTraces.set(traces.length - 1, { list: kept, stride: 3 });
+    };
     polyGroups(
       polysOf(r).map((o) => o.p),
       C,
     ).forEach(([name, col, list]) => {
       if (!list.length) return;
+      if (slice && name === 'walls') {
+        sliceTrace(list, rgba(col, 0.95), `walls cut at y ${slice.y.toFixed(2)} (${CIR[sci]} circle)`, 2);
+        return;
+      }
       const x = [];
       const y = [];
       const text = [];
@@ -2712,7 +2874,11 @@
         ),
       );
     const hl = stepPolys(s);
-    if (hl.length) {
+    const hlWalls = slice ? hl.filter((p) => p.tri && kindOf(p.normal) === 'wall') : [];
+    if (hlWalls.length) sliceTrace(hlWalls, C.fg, 'walls this step used, cut', 4);
+    const hlRest = slice ? hl.filter((p) => !hlWalls.includes(p)) : hl;
+    if (hlRest.length) {
+      const hl = hlRest;
       const x = [];
       const y = [];
       const text = [];
@@ -3624,12 +3790,18 @@
     $('tabSteps').addEventListener('click', () => setTab('steps'));
     $('tabMap').addEventListener('click', () => setTab('map'));
     $('mapSeek').addEventListener('input', () => seekTo(parseInt($('mapSeek').value, 10)));
+    $('mapSeek').addEventListener('mousemove', seekHover);
+    window.addEventListener('resize', debounce(drawSeekStrip, 100));
     $('mapPrev').addEventListener('click', () => seekTo(mapState.idx - 1));
     $('mapNext').addEventListener('click', () => seekTo(mapState.idx + 1));
     $('mapPrevF').addEventListener('click', () => seekFrame(-1));
     $('mapNextF').addEventListener('click', () => seekFrame(1));
     $('mapPlay').addEventListener('click', togglePlay);
     $('mapNormals').addEventListener('change', () => {
+      renderMap();
+      saveSettings();
+    });
+    $('mapSlice').addEventListener('change', () => {
       renderMap();
       saveSettings();
     });
@@ -3702,6 +3874,7 @@
         span: $('mapSpan').value,
         follow: $('mapFollow').checked,
         normals: $('mapNormals').checked,
+        slice: $('mapSlice').value,
         opacity: $('mapOpacity').value,
         mirror: $('mapMirror').checked,
         moved: $('mapMoved').checked,
@@ -3771,6 +3944,8 @@
       if (s.map.span) $('mapSpan').value = s.map.span;
       if (typeof s.map.follow === 'boolean') $('mapFollow').checked = s.map.follow;
       if (typeof s.map.normals === 'boolean') $('mapNormals').checked = s.map.normals;
+      if (typeof s.map.slice === 'string' && ['', '0', '1', '2'].includes(s.map.slice))
+        $('mapSlice').value = s.map.slice;
       if (s.map.opacity !== undefined) {
         $('mapOpacity').value = s.map.opacity;
         $('mapOpacityOut').textContent = $('mapOpacity').value + '%';
@@ -4116,6 +4291,15 @@
     return evs;
   }
 
+  const DEFAULT_FRAMES = 100;
+
+  function setDefaultRange() {
+    const first = log.nums[0];
+    const last = log.nums[log.nums.length - 1];
+    $('f0').value = first;
+    $('f1').value = Math.min(last, first + DEFAULT_FRAMES - 1);
+  }
+
   function openText(text, name, fresh) {
     const evs = useLog(text, name);
     if (!evs) return;
@@ -4123,10 +4307,7 @@
       mapState.restore = null;
       mapState.zoom = null;
       mapState.steps = [];
-      const firstHit = evs.find((e) => e.k === 'hit');
-      const c = firstHit ? firstHit.f : log.nums[0] + 2;
-      $('f0').value = Math.max(log.nums[0], c - 2);
-      $('f1').value = Math.max(log.nums[0], c - 2) + 4;
+      setDefaultRange();
       storeFile(name, text);
     }
     render();
@@ -4136,6 +4317,9 @@
     applySettings(v.settings);
     const name = v.file.name || 'recording';
     if (!useLog(v.file.text, name)) return;
+    const s = v.settings || {};
+    const bound = (x) => x !== undefined && x !== null && String(x).trim() !== '' && !isNaN(parseInt(x, 10));
+    if (!bound(s.f0) || !bound(s.f1)) setDefaultRange();
     storeFile(name, v.file.text);
     render();
     if (v.zoom && typeof v.zoom === 'object' && Object.keys(v.zoom).length)
