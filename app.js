@@ -335,36 +335,65 @@
   }
 
   const POLY_IDS = new Map();
+  const POLY_MESH = new Map();
+  const BG_MESH = new Map();
 
   function triIdKey(bg, tri) {
     return bg + '|' + tri.map((t) => t.join(',')).join(';');
   }
 
-  function indexPolyIds(o, bg) {
+  function eventMesh(e) {
+    if (e.mesh === 'kcl' || e.mesh === 'dzb') return e.mesh;
+    const name = e.ev.replace(/^horse_/, '');
+    if (name.startsWith('wall_dzb')) return 'dzb';
+    if (name === 'wall_cir' || name === 'wall_list') return 'kcl';
+    return undefined;
+  }
+
+  function indexPolyIds(o, bg, mesh) {
     if (!o || typeof o !== 'object') return;
     if (Array.isArray(o)) {
-      o.forEach((x) => indexPolyIds(x, bg));
+      o.forEach((x) => indexPolyIds(x, bg, mesh));
       return;
     }
     const b = typeof o.bg === 'number' ? o.bg : bg;
-    if (typeof o.poly === 'number' && typeof b === 'number' && Array.isArray(o.tri) && o.tri.length === 3)
-      POLY_IDS.set(triIdKey(b, o.tri), o.poly);
+    const m = o.mesh === 'kcl' || o.mesh === 'dzb' ? o.mesh : mesh;
+    if (typeof b === 'number' && Array.isArray(o.tri) && o.tri.length === 3) {
+      const key = triIdKey(b, o.tri);
+      if (typeof o.poly === 'number') POLY_IDS.set(key, o.poly);
+      if (m) {
+        POLY_MESH.set(key, m);
+        if (!BG_MESH.has(b)) BG_MESH.set(b, new Set());
+        BG_MESH.get(b).add(m);
+      }
+    }
     for (const k in o) {
       const v = o[k];
-      if (v && typeof v === 'object') indexPolyIds(v, b);
+      if (v && typeof v === 'object') indexPolyIds(v, b, m);
     }
   }
 
   function fillPolyId(p) {
-    if (p && p.poly === undefined && typeof p.bg === 'number' && Array.isArray(p.tri)) {
-      const id = POLY_IDS.get(triIdKey(p.bg, p.tri));
-      if (id !== undefined) p.poly = id;
+    if (p && typeof p.bg === 'number' && Array.isArray(p.tri)) {
+      const key = triIdKey(p.bg, p.tri);
+      if (p.poly === undefined) {
+        const id = POLY_IDS.get(key);
+        if (id !== undefined) p.poly = id;
+      }
+      if (p.mesh === undefined) {
+        const m = POLY_MESH.get(key);
+        const bm = BG_MESH.get(p.bg);
+        if (m) p.mesh = m;
+        else if (bm && bm.size === 1) p.mesh = [...bm][0];
+      }
     }
     return p;
   }
 
   function parseLog(text) {
     POLY_IDS.clear();
+    POLY_MESH.clear();
+    BG_MESH.clear();
     const frames = new Map();
     let bad = 0;
     let seq = 0;
@@ -382,7 +411,7 @@
         continue;
       }
       e.__n = seq++;
-      indexPolyIds(e, undefined);
+      indexPolyIds(e, undefined, eventMesh(e));
       if (!frames.has(e.f)) frames.set(e.f, {});
       const fr = frames.get(e.f);
       (fr[e.ev] = fr[e.ev] || []).push(e);
@@ -1102,6 +1131,7 @@
       'bg ' +
       p.bg +
       (p.poly !== undefined ? ' poly ' + p.poly : ' poly ?') +
+      (p.mesh ? ' ' + p.mesh.toUpperCase() : '') +
       (p.actor !== undefined ? ', actor ' + p.actor : '')
     );
   }
@@ -2526,6 +2556,7 @@
     const ys = p.tri.map((v) => v[1]);
     const rows = [];
     const row = (k, v) => rows.push(`<dt>${k}</dt><dd>${v}</dd>`);
+    row('collision', p.mesh === 'kcl' ? 'KCL' : p.mesh === 'dzb' ? 'DZB' : 'not logged');
     p.tri.forEach((v, i) => row(`vertex ${i}`, vec(v)));
     row('normal', vec([w.nx, w.ny, w.nz]));
     row('|n|^2 - 1', (w.len2 - 1).toExponential(3));
@@ -2541,12 +2572,14 @@
       if (w.seam > 0) {
         row('seam', `<b>yes</b>, ${w.seam.toFixed(7)} deep`);
         const kinds =
-          p.actor === 732
-            ? [
-                ['room KCL', true, w.restRoom],
-                ['room DZB', false, w.restObj],
-              ]
-            : [['', false, w.restObj]];
+          p.mesh === 'kcl'
+            ? [['', true, w.restRoom]]
+            : p.mesh === 'dzb'
+              ? [['', false, w.restObj]]
+              : [
+                  ['if KCL', true, w.restRoom],
+                  ['if DZB', false, w.restObj],
+                ];
         kinds.forEach(([tag, room, rest]) => {
           const sc = seamScan(p, w, room);
           if (!sc) return;
