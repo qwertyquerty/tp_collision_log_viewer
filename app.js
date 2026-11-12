@@ -3142,7 +3142,7 @@
       zerolinecolor: C.line,
       color: C.muted,
       tickfont: { size: 10 },
-      tickformat: '.0f',
+      tickformat: '~f',
     });
     const layout = {
       height: 640,
@@ -3665,7 +3665,7 @@
           color: C.muted,
           backgroundcolor: C.panel,
           showbackground: false,
-          tickformat: '.0f',
+          tickformat: '~f',
         },
         follow ? { range: [c - view / 2, c + view / 2] } : {},
       );
